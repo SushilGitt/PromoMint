@@ -1,0 +1,24 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "0389ad7b1333114bcd48c781c6089a86"
+name = "PromoMint"
+application_url = "https://combined-nationally-happening-moisture.trycloudflare.com"
+embedded = true
+
+[webhooks]
+api_version = "2026-07"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = ""
+
+[auth]
+redirect_urls = [
+  "https://combined-nationally-happening-moisture.trycloudflare.com/auth/callback",
+  "https://combined-nationally-happening-moisture.trycloudflare.com/auth/shopify/callback",
+  "https://combined-nationally-happening-moisture.trycloudflare.com/api/auth/callback"
+]
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true

@@ -1,0 +1,24 @@
+{
+	"cache": {
+		"most-recent-occurrence-warn-on-available-upgrade": {
+			"value": true,
+			"timestamp": 1774939277751
+		},
+		"npm-package-@shopify/cli": {
+			"value": "3.92.1",
+			"timestamp": 1774939277982
+		},
+		"rate-limited-occurrences-report-analytics-event": {
+			"value": [
+				1774939881542
+			],
+			"timestamp": 1774939881542
+		},
+		"rate-limited-occurrences-send-error-to-bugsnag": {
+			"value": [
+				1774939881931
+			],
+			"timestamp": 1774939881931
+		}
+	}
+}

@@ -1,0 +1,248 @@
+{% assign plan = shop.metafields.custom["mx-pdp-coupon"] %}
+
+{% assign is_premium = false %}
+{% if plan == 'Basic' or plan == 'premium' %}
+  {% assign is_premium = true %}
+{% endif %}
+
+{% assign coupon_limit = 3 %}
+{% if is_premium %}
+  {% assign coupon_limit = 6 %}
+{% endif %}
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@9/swiper-bundle.min.css">
+<script src="https://cdn.jsdelivr.net/npm/swiper@9/swiper-bundle.min.js" defer></script>
+
+<style>
+.mxt-coupon-container{
+  width:100%;
+  margin-top:10px;
+  background: {{ block.settings.wrapper_bg }};
+  padding:12px;
+  border-radius:10px;
+  position:relative;
+}
+
+.mxt-heading{
+  font-size:20px;
+  font-weight:600;
+  margin-bottom:10px;
+  color: {{ block.settings.heading_color }};
+}
+
+.mxt-coupon-item{
+  background: {{ block.settings.card_bg }};
+  border-radius:12px;
+  display:flex;
+  box-shadow:0 4px 12px rgba(0,0,0,0.08);
+}
+
+.mxt-coupon-stub{
+  width:26px;
+  background: {{ block.settings.stub_bg }};
+  position:relative;
+}
+
+.mxt-coupon-stub:before{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:
+  radial-gradient(circle at 0 25%, {{ block.settings.card_bg }} 8px, transparent 9px),
+  radial-gradient(circle at 0 50%, {{ block.settings.card_bg }} 8px, transparent 9px),
+  radial-gradient(circle at 0 75%, {{ block.settings.card_bg }} 8px, transparent 9px);
+}
+
+.mxt-coupon-body{
+  padding:12px;
+  width:100%;
+}
+
+.mxt-coupon-title{
+  font-weight:600;
+  font-size:14px;
+  color: {{ block.settings.title_color }};
+}
+
+.mxt-coupon-code{
+  color: {{ block.settings.code_color }};
+  font-size:13px;
+  margin-top:4px;
+}
+
+.mxt-coupon-copy{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  border-top:1px dashed #ddd;
+  padding-top:6px;
+  margin-top:6px;
+  cursor:pointer;
+  color: {{ block.settings.copy_color }};
+}
+
+.mxt-copy-icon{
+  width:22px;
+  height:22px;
+}
+
+/* Arrows */
+.mxt-swiper-nav{
+  position:absolute;
+  top: {% if block.settings.heading_text != blank %}60%{% else %}50%{% endif %};
+  transform:translateY(-50%);
+  z-index:10;
+}
+
+.mxt-prev{ left:-1px; }
+.mxt-next{ right:-1px; }
+
+.mxt-swiper-nav button{
+  width:34px;
+  height:34px;
+  border:none;
+  background: {{ block.settings.arrow_bg }};
+  color: {{ block.settings.arrow_color }};
+  border-radius:6px;
+  cursor:pointer;
+}
+</style>
+
+<div class="mxt-coupon-container">
+
+  {% if block.settings.heading_text != blank %}
+    <div class="mxt-heading">{{ block.settings.heading_text }}</div>
+  {% endif %}
+
+  {% if block.settings.show_arrows %}
+    <div class="mxt-swiper-nav mxt-prev"><button>&lt;</button></div>
+    <div class="mxt-swiper-nav mxt-next"><button>&gt;</button></div>
+  {% endif %}
+
+  <div class="swiper mxt-swiper">
+    <div class="swiper-wrapper">
+
+      {% assign fallback_titles = "Shop ₹499+ Get 15% OFF,Shop ₹699+ Get 20% OFF,Buy 2 Get 10% OFF,Flat ₹100 OFF,Free Shipping,Special Discount" | split: "," %}
+      {% assign fallback_codes = "FLAT15,FLAT20,SAVE10,LESS100,FREESHIP,SPECIAL" | split: "," %}
+
+      {% for i in (1..coupon_limit) %}
+
+        {% assign title_key = 'title_' | append: i %}
+        {% assign code_key = 'code_' | append: i %}
+
+        {% assign title_val = block.settings[title_key] %}
+        {% assign code_val = block.settings[code_key] %}
+
+        {% if title_val == blank %}
+          {% assign title_val = fallback_titles[forloop.index0] %}
+        {% endif %}
+
+        {% if code_val == blank %}
+          {% assign code_val = fallback_codes[forloop.index0] %}
+        {% endif %}
+
+        <div class="swiper-slide" style="width:260px;">
+          <div class="mxt-coupon-item">
+            <div class="mxt-coupon-stub"></div>
+
+            <div class="mxt-coupon-body">
+              <div class="mxt-coupon-title">{{ title_val }}</div>
+              <div class="mxt-coupon-code">Code: <b>{{ code_val }}</b></div>
+
+              <div class="mxt-coupon-copy" data-copy="{{ code_val }}">
+                <span class="mxt-copy-label">copy code</span>
+
+                <svg class="mxt-copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="11" height="11" rx="2"/>
+                  <rect x="4" y="4" width="11" height="11" rx="2"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      {% endfor %}
+
+    </div>
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('.mxt-swiper').forEach(function(el){
+  new Swiper(el, {
+    slidesPerView: 'auto',
+    spaceBetween: 12,
+    navigation: {
+      nextEl: el.closest('.mxt-coupon-container').querySelector('.mxt-next'),
+      prevEl: el.closest('.mxt-coupon-container').querySelector('.mxt-prev')
+    }
+  });
+});
+
+document.addEventListener("click", function(e){
+  var el = e.target.closest(".mxt-coupon-copy");
+  if(!el) return;
+
+  var code = el.getAttribute("data-copy");
+  navigator.clipboard.writeText(code);
+
+  var label = el.querySelector(".mxt-copy-label");
+  label.innerText = "Copied";
+  setTimeout(function(){
+    label.innerText = "copy code";
+  },1500);
+});
+</script>
+
+{% schema %}
+{
+  "name": "PromoLoom",
+  "target": "section",
+  "enabled_on": { "templates": ["product"] },
+  "settings": [
+
+    { "type": "text", "id": "heading_text", "label": "Heading text", "default": "Available Offers" },
+    { "type": "color", "id": "heading_color", "label": "Heading color", "default": "#000000" },
+
+    { "type": "color", "id": "wrapper_bg", "label": "Wrapper background", "default": "#f5f5f5" },
+
+    { "type": "color", "id": "card_bg", "label": "Card background", "default": "#ffffff" },
+    { "type": "color", "id": "stub_bg", "label": "Stub color", "default": "#6b2147" },
+
+    { "type": "color", "id": "title_color", "label": "Title color", "default": "#000000" },
+    { "type": "color", "id": "code_color", "label": "Code color", "default": "#0a8f2f" },
+    { "type": "color", "id": "copy_color", "label": "Copy text color", "default": "#000000" },
+
+    { "type": "color", "id": "arrow_bg", "label": "Arrow background", "default": "#000000" },
+
+    { "type": "color", "id": "arrow_color", "label": "Arrow icon color", "default": "#ffffff" },
+
+    { "type": "checkbox", "id": "show_arrows", "label": "Show arrows", "default": true },
+
+    { "type": "header", "content": "Coupon 1" },
+    { "type": "text", "id": "title_1", "label": "Title" },
+    { "type": "text", "id": "code_1", "label": "Code" },
+
+    { "type": "header", "content": "Coupon 2" },
+    { "type": "text", "id": "title_2", "label": "Title" },
+    { "type": "text", "id": "code_2", "label": "Code" },
+
+    { "type": "header", "content": "Coupon 3" },
+    { "type": "text", "id": "title_3", "label": "Title" },
+    { "type": "text", "id": "code_3", "label": "Code" },
+
+
+    { "type": "header", "content": "Coupon 4 (Premium plan only)" },
+    { "type": "text", "id": "title_4", "label": "Title" },
+    { "type": "text", "id": "code_4", "label": "Code" },
+
+    { "type": "header", "content": "Coupon 5 (Premium plan only)" },
+    { "type": "text", "id": "title_5", "label": "Title" },
+    { "type": "text", "id": "code_5", "label": "Code" },
+
+    { "type": "header", "content": "Coupon 6 (Premium plan only)" },
+    { "type": "text", "id": "title_6", "label": "Title" },
+    { "type": "text", "id": "code_6", "label": "Code" }
+  ]
+}
+{% endschema %}
