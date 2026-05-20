@@ -8,7 +8,7 @@ import {
   mongoSessionCollection,
 } from "./mongo-config.js";
 const PREMIUM_PLAN = "Premium";
-const PREMIUM_PLAN_PRICE = 149;
+const PREMIUM_PLAN_PRICE = 19;
 const shopifyHost = process.env.HOST?.replace(/https?:\/\//, "");
 const shopifyScopes = (process.env.SCOPES || "")
   .split(",")

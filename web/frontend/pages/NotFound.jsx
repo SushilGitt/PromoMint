@@ -1,17 +1,18 @@
 import { Card, EmptyState, Page } from "@shopify/polaris";
 import { notFoundImage } from "../assets";
+import { promoMintStyles } from "../brand";
 
 export default function NotFound() {
   return (
     <Page>
-      <Card sectioned>
+      <Card sectioned style={promoMintStyles.accentCard}>
         <EmptyState
-          heading="There is no page at this address"
+          heading="This page isn’t available"
           image={notFoundImage}
         >
           <p>
-            Check the URL and try again, or use the search bar to find what
-            you need.
+            Double-check the address and try again, or use Shopify navigation
+            to return to the section you need.
           </p>
         </EmptyState>
       </Card>

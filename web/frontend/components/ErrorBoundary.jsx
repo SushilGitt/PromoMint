@@ -21,11 +21,11 @@ export class ErrorBoundary extends React.Component {
     }
 
     return (
-      <Page title="App Error">
+      <Page title="Something went wrong">
         <Layout>
           <Layout.Section>
-            <Banner title="The app hit a render error" status="critical">
-              <p>Check the details below and fix the component that is crashing.</p>
+            <Banner title="The app ran into a display error" status="critical">
+              <p>Review the details below to identify the component that failed to render.</p>
             </Banner>
           </Layout.Section>
           <Layout.Section>

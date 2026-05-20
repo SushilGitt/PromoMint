@@ -11,6 +11,7 @@ import {
   TextContainer,
   Icon,
 } from "@shopify/polaris";
+import { promoMintColors, promoMintStyles } from "../brand";
 import { CircleTickMinor } from "@shopify/polaris-icons";
 import { Redirect } from "@shopify/app-bridge/actions";
 import { useAppBridge } from "@shopify/app-bridge-react";
@@ -55,7 +56,7 @@ export default function Pricing() {
   const [confirm, setConfirm] = useState({ open: false, target: null });
   const [banner, setBanner] = useState({ msg: "", status: null });
 
-  const PRICE = "149";
+  const PRICE = "19";
 
   const selectedPlan = useMemo(() => {
     if (!serverTier) return null;
@@ -159,12 +160,12 @@ export default function Pricing() {
 
         if (!response.ok) {
           throw new Error(
-            getErrorMessage(data, "Failed to switch to the Free plan.")
+            getErrorMessage(data, "We couldn’t switch you to the Free plan.")
           );
         }
 
         await refreshTier();
-        setBanner({ msg: "Switched to Free plan", status: "success" });
+        setBanner({ msg: "Your store is now on the Free plan.", status: "success" });
         return;
       }
 
@@ -177,13 +178,13 @@ export default function Pricing() {
 
       if (!res.ok) {
         throw new Error(
-          getErrorMessage(data, "Failed to start the Premium subscription.")
+          getErrorMessage(data, "We couldn’t start the Premium subscription.")
         );
       }
 
       if (data.isActiveSubscription) {
         await refreshTier();
-        setBanner({ msg: "Premium plan is already active.", status: "success" });
+        setBanner({ msg: "Your Premium plan is already active.", status: "success" });
         return;
       }
 
@@ -193,13 +194,13 @@ export default function Pricing() {
         return;
       }
 
-      throw new Error("No Shopify billing confirmation URL was returned.");
+      throw new Error("Shopify did not return a billing approval link.");
     } catch (error) {
       setBanner({
         msg:
           error instanceof Error
             ? error.message
-            : "Failed to start the Premium subscription.",
+            : "We couldn’t start the Premium subscription.",
         status: "critical",
       });
     } finally {
@@ -214,26 +215,30 @@ export default function Pricing() {
   const Feature = ({ children }) => (
     <Stack spacing="tight" alignment="center">
       {tick}
-      <span style={{ fontSize: 14 }}>{children}</span>
+      <span style={{ fontSize: 14, color: promoMintColors.text }}>{children}</span>
     </Stack>
   );
 
   /* ---------- Styles ---------- */
 
   const cardStyle = (plan) => ({
-    borderRadius: 18,
+    borderRadius: 20,
     border: isCurrent(plan)
-      ? "2px solid #2563EB"
-      : "1px solid #E5E7EB",
+      ? `2px solid ${promoMintColors.borderStrong}`
+      : `1px solid ${promoMintColors.border}`,
     boxShadow: isCurrent(plan)
-      ? "0 18px 45px rgba(37,99,235,0.25)"
-      : "0 4px 14px rgba(15,23,42,0.06)",
+      ? `0 18px 45px ${promoMintColors.shadowStrong}`
+      : `0 8px 24px ${promoMintColors.shadow}`,
+    background:
+      plan === "premium"
+        ? `linear-gradient(180deg, #ffffff 0%, ${promoMintColors.indigoSoft} 100%)`
+        : `linear-gradient(180deg, #ffffff 0%, ${promoMintColors.mintSoft} 100%)`,
     transform: isCurrent(plan) ? "translateY(-4px)" : "none",
     transition: "all 0.2s ease",
   });
 
   const currentBadge = {
-    background: "#2563EB",
+    background: promoMintColors.indigo,
     color: "#fff",
     padding: "4px 12px",
     borderRadius: 999,
@@ -241,27 +246,125 @@ export default function Pricing() {
   };
 
   const popularBadge = {
-    background: "#F59E0B",
-    color: "#111",
+    background: promoMintColors.mint,
+    color: promoMintColors.text,
     padding: "4px 12px",
     borderRadius: 999,
     fontSize: 12,
   };
 
-  /* Attractive Free button gradient */
-  const freeButtonStyle = {
-    background: "linear-gradient(135deg,#ef4444,#dc2626)",
-    color: "#fff",
-    border: "none",
-    fontWeight: 600,
+  const freeButtonStyle = promoMintStyles.secondaryButton;
+
+  const premiumButtonStyle = promoMintStyles.primaryButton;
+
+  const mutedTextStyle = { color: promoMintColors.mutedText };
+
+  const pageIntroStyle = {
+    color: promoMintColors.mutedText,
+    marginBottom: 18,
   };
 
-  const premiumButtonStyle = {
-    background: "linear-gradient(135deg,#2563eb,#1d4ed8)",
-    color: "#fff",
-    border: "none",
-    fontWeight: 600,
-  };
+  const priceStyle = { fontSize: 34, color: promoMintColors.text };
+
+  const sectionSpacingStyle = { marginTop: 14 };
+
+  const actionSpacingStyle = { marginTop: 18 };
+
+  const cardHeadingStyle = { color: promoMintColors.text };
+
+  const planPageTitle = "Choose your PromoMint plan";
+
+  const planIntro =
+    "Pick the plan that matches how many coupon offers you want to feature on your product pages.";
+
+  const planPageTitleContent = (
+    <div style={pageIntroStyle}>{planIntro}</div>
+  );
+
+  const pageTitle = planPageTitle;
+
+  const pageSubtitle = planPageTitleContent;
+
+  const pageContent = (
+    <Layout>
+      <Layout.Section oneHalf>
+        <Card sectioned style={cardStyle("free")}>
+          <Stack alignment="center" distribution="equalSpacing">
+            <h2 style={cardHeadingStyle}>Free</h2>
+            {isCurrent("free") && (
+              <span style={currentBadge}>Current</span>
+            )}
+          </Stack>
+
+          <h1 style={priceStyle}>$0</h1>
+          <p style={mutedTextStyle}>
+            A simple option for smaller catalogs
+          </p>
+
+          <Stack vertical spacing="loose" style={sectionSpacingStyle}>
+            <Feature>Display coupon offers on product pages</Feature>
+            <Feature>Show up to 3 active offers</Feature>
+            <Feature>Adjust colors and layout</Feature>
+            <Feature>Keep slider arrow navigation</Feature>
+            <Feature>Support mobile-friendly browsing</Feature>
+          </Stack>
+
+          <div style={actionSpacingStyle}>
+            <Button
+              fullWidth
+              style={freeButtonStyle}
+              disabled={isCurrent("free") || loading.page}
+              loading={loading.action === "free"}
+              onClick={() => openConfirm("free")}
+            >
+              {isCurrent("free") ? "Active plan" : "Choose Free"}
+            </Button>
+          </div>
+        </Card>
+      </Layout.Section>
+
+      <Layout.Section oneHalf>
+        <Card sectioned style={cardStyle("premium")}>
+          <Stack alignment="center" distribution="equalSpacing">
+            <h2 style={cardHeadingStyle}>Premium</h2>
+            {!isCurrent("premium") && (
+              <span style={popularBadge}>Popular choice</span>
+            )}
+            {isCurrent("premium") && (
+              <span style={currentBadge}>Current</span>
+            )}
+          </Stack>
+
+          <h1 style={priceStyle}>${PRICE}</h1>
+          <p style={mutedTextStyle}>
+            More room for stores running multiple offers
+          </p>
+
+          <Stack vertical spacing="loose" style={sectionSpacingStyle}>
+            <Feature>Display coupon offers on product pages</Feature>
+            <Feature>Show up to 6 active offers</Feature>
+            <Feature>Adjust colors and layout</Feature>
+            <Feature>Keep slider arrow navigation</Feature>
+            <Feature>Support mobile-friendly browsing</Feature>
+          </Stack>
+
+          <div style={actionSpacingStyle}>
+            <Button
+              fullWidth
+              style={premiumButtonStyle}
+              disabled={isCurrent("premium") || loading.page}
+              loading={loading.action === "premium"}
+              onClick={() => openConfirm("premium")}
+            >
+              {isCurrent("premium")
+                ? "Premium is active"
+                : "Choose Premium"}
+            </Button>
+          </div>
+        </Card>
+      </Layout.Section>
+    </Layout>
+  );
 
   return (
     <>
@@ -271,14 +374,14 @@ export default function Pricing() {
         accessibilityLabel="Plan change confirmation"
         title={
           confirm.target === "free"
-            ? "Switch to Free plan?"
-            : "Upgrade to Premium?"
+            ? "Move to the Free plan?"
+            : "Continue with Premium?"
         }
         primaryAction={{
           content:
             confirm.target === "free"
-              ? "Switch to Free"
-              : `Subscribe $${PRICE}/month`,
+              ? "Confirm Free plan"
+              : `Approve $${PRICE}/month`,
           onAction: runConfirm,
           loading: loading.action === confirm.target,
         }}
@@ -287,14 +390,14 @@ export default function Pricing() {
           <TextContainer>
             <p>
               {confirm.target === "free"
-                ? "Free plan allows up to 3 coupons."
-                : "Premium plan allows up to 6 coupons."}
+                ? "The Free plan supports up to 3 coupon offers."
+                : "The Premium plan supports up to 6 coupon offers."}
             </p>
           </TextContainer>
         </Modal.Section>
       </Modal>
 
-      <Page title="PromoLoom Plans">
+      <Page title={pageTitle} subtitle={pageSubtitle}>
         {!!banner.msg && (
           <Banner
             status={banner.status}
@@ -306,89 +409,12 @@ export default function Pricing() {
 
         {loading.page ? (
           <Banner status="info">
-            Loading your current plan. You can still review the available plans
-            below.
+            We’re checking your current plan. You can still review the options
+            below while that loads.
           </Banner>
         ) : null}
 
-        <Layout>
-          <Layout.Section oneHalf>
-            <Card sectioned style={cardStyle("free")}>
-              <Stack alignment="center" distribution="equalSpacing">
-                <h2>Free</h2>
-                {isCurrent("free") && (
-                  <span style={currentBadge}>Current</span>
-                )}
-              </Stack>
-
-              <h1 style={{ fontSize: 34 }}>$0</h1>
-              <p style={{ color: "#6B7280" }}>
-                Perfect for small stores
-              </p>
-
-              <Stack vertical spacing="loose" style={{ marginTop: 14 }}>
-                <Feature>Show coupons on product pages</Feature>
-                <Feature>Up to 3 coupons</Feature>
-                <Feature>Customize colors & layout</Feature>
-                <Feature>Slider arrow controls</Feature>
-                <Feature>Mobile responsive slider</Feature>
-              </Stack>
-
-              <div style={{ marginTop: 18 }}>
-                <Button
-                  fullWidth
-                  style={freeButtonStyle}
-                  disabled={isCurrent("free") || loading.page}
-                  loading={loading.action === "free"}
-                  onClick={() => openConfirm("free")}
-                >
-                  {isCurrent("free") ? "Current plan" : "Switch to Free"}
-                </Button>
-              </div>
-            </Card>
-          </Layout.Section>
-
-          <Layout.Section oneHalf>
-            <Card sectioned style={cardStyle("premium")}>
-              <Stack alignment="center" distribution="equalSpacing">
-                <h2>Premium</h2>
-                {!isCurrent("premium") && (
-                  <span style={popularBadge}>Most popular</span>
-                )}
-                {isCurrent("premium") && (
-                  <span style={currentBadge}>Current</span>
-                )}
-              </Stack>
-
-              <h1 style={{ fontSize: 34 }}>${PRICE}</h1>
-              <p style={{ color: "#6B7280" }}>
-                Advanced features for growing stores
-              </p>
-
-              <Stack vertical spacing="loose" style={{ marginTop: 14 }}>
-                <Feature>Show coupons on product pages</Feature>
-                <Feature>Up to 6 coupons</Feature>
-                <Feature>Customize colors & layout</Feature>
-                <Feature>Slider arrow controls</Feature>
-                <Feature>Mobile responsive slider</Feature>
-              </Stack>
-
-              <div style={{ marginTop: 18 }}>
-                <Button
-                  fullWidth
-                  style={premiumButtonStyle}
-                  disabled={isCurrent("premium") || loading.page}
-                  loading={loading.action === "premium"}
-                  onClick={() => openConfirm("premium")}
-                >
-                  {isCurrent("premium")
-                    ? "Premium active"
-                    : "Upgrade to Premium"}
-                </Button>
-              </div>
-            </Card>
-          </Layout.Section>
-        </Layout>
+        {pageContent}
       </Page>
     </>
   );

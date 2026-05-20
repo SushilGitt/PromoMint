@@ -22,7 +22,9 @@ export default function App() {
             <ErrorBoundary>
               <NavigationMenu
                 navigationLinks={[
-                  { label: "Pricing", destination: "/pricing" },
+                  { label: "Overview", destination: "/" },
+                  { label: "Plans", destination: "/pricing" },
+                  { label: "Help", destination: "/support" },
                 ]}
               />
               <Routes pages={pages} />

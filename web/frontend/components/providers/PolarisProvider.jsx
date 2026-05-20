@@ -3,6 +3,7 @@ import { AppProvider } from "@shopify/polaris";
 import { useNavigate } from "@shopify/app-bridge-react";
 import translations from "@shopify/polaris/locales/en.json";
 import "@shopify/polaris/build/esm/styles.css";
+import { promoMintStyles } from "../../brand";
 
 function AppBridgeLink({ url, children, external, ...rest }) {
   const navigate = useNavigate();
@@ -50,7 +51,7 @@ function AppBridgeLink({ url, children, external, ...rest }) {
 export function PolarisProvider({ children }) {
   return (
     <AppProvider i18n={translations} linkComponent={AppBridgeLink}>
-      {children}
+      <div style={promoMintStyles.appFrame}>{children}</div>
     </AppProvider>
   );
 }
