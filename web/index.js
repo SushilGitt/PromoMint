@@ -4,7 +4,7 @@ import { readFileSync } from "fs";
 import crypto from "crypto";
 import express from "express";
 import serveStatic from "serve-static";
-import { BillingError, DeliveryMethod } from "@shopify/shopify-api";
+import { BillingError } from "@shopify/shopify-api";
 
 import shopify from "./shopify.js";
 import cancelSubscription from "./cancel-subscription.js";
@@ -94,42 +94,6 @@ app.post(
   shopify.processWebhooks({
     webhookHandlers: {
       ...GDPRWebhookHandlers,
-      APP_SUBSCRIPTIONS_UPDATE: {
-        deliveryMethod: DeliveryMethod.Http,
-        callbackUrl: "/api/webhooks",
-        callback: async (_topic, shop, body) => {
-          try {
-            const payload = JSON.parse(body);
-            const status = payload?.app_subscription?.status;
-            const tier = status === "ACTIVE" ? "premium" : "free";
-
-            const session = await loadSessionForShop(shop);
-            if (!session) {
-              console.warn(
-                `[app_subscriptions/update] No offline session for ${shop}; skipping metafield sync`
-              );
-              return;
-            }
-
-            if (tier === "premium") {
-              await MetafieldService.ensureAppMetafield(session);
-              await MetafieldService.setShopMetafield(session, "premium");
-            } else {
-              await MetafieldService.deleteAppMetafield(session);
-              await MetafieldService.setShopMetafield(session, "free");
-            }
-
-            console.log(
-              `[app_subscriptions/update] ${shop}: status=${status} -> tier=${tier}`
-            );
-          } catch (err) {
-            console.error(
-              `[app_subscriptions/update] Failed for ${shop}:`,
-              err
-            );
-          }
-        },
-      },
     },
   })
 );
@@ -232,19 +196,25 @@ const loadSessionForShop = async (shop) => {
 };
 
 const getShopFromRequest = async (req) => {
+  const bearerToken = req.headers.authorization?.match(/Bearer (.*)/)?.[1];
+
+  if (bearerToken) {
+    try {
+      const payload = await shopify.api.session.decodeSessionToken(bearerToken);
+      const tokenShop = payload?.dest?.replace("https://", "") || "";
+      if (tokenShop) return tokenShop;
+    } catch {
+      // Fall through to query and host resolution.
+    }
+  }
+
   const queryShop =
     typeof req.query.shop === "string" ? req.query.shop.trim() : "";
   if (queryShop) return queryShop;
 
-  const bearerToken = req.headers.authorization?.match(/Bearer (.*)/)?.[1];
-  if (!bearerToken) return "";
-
-  try {
-    const payload = await shopify.api.session.decodeSessionToken(bearerToken);
-    return payload?.dest?.replace("https://", "") || "";
-  } catch {
-    return "";
-  }
+  const hostParam =
+    typeof req.query.host === "string" ? req.query.host.trim() : "";
+  return getShopFromHostParam(hostParam);
 };
 
 const getSession = async (req, res) => {
@@ -286,11 +256,16 @@ app.use((req, res, next) => {
 
 const isUnauthorizedError = (err) =>
   err?.response?.code === 401 ||
+  err?.response?.code === 403 ||
   err?.code === 401 ||
+  err?.code === 403 ||
   err?.statusCode === 401 ||
+  err?.statusCode === 403 ||
   (typeof err?.message === "string" &&
     (err.message.includes("401") ||
-      err.message.toLowerCase().includes("unauthorized")));
+      err.message.includes("403") ||
+      err.message.toLowerCase().includes("unauthorized") ||
+      err.message.toLowerCase().includes("forbidden")));
 
 const formatBillingErrorDetails = (errorData = []) =>
   errorData
@@ -525,7 +500,7 @@ app.get("/api/scroll-to-top/hasSubscription", async (req, res) => {
 /*                         CREATE SUBSCRIPTION                                */
 /* -------------------------------------------------------------------------- */
 
-app.get("/api/createSubscription", shopify.validateAuthenticatedSession(), async (req, res) => {
+app.get("/api/createSubscription", async (req, res) => {
   let session;
 
   try {
@@ -626,7 +601,7 @@ app.get("/api/createSubscription", shopify.validateAuthenticatedSession(), async
 /*                         CANCEL SUBSCRIPTION                                */
 /* -------------------------------------------------------------------------- */
 
-app.get("/api/cancelSubscription", shopify.validateAuthenticatedSession(), async (req, res) => {
+app.get("/api/cancelSubscription", async (req, res) => {
   let session;
 
   try {
@@ -663,7 +638,7 @@ app.get("/api/cancelSubscription", shopify.validateAuthenticatedSession(), async
 /*                        CHECK ACTIVE SUBSCRIPTION                           */
 /* -------------------------------------------------------------------------- */
 
-app.get("/api/hasActiveSubscription", shopify.validateAuthenticatedSession(), async (req, res) => {
+app.get("/api/hasActiveSubscription", async (req, res) => {
   let session;
 
   try {
