@@ -1,5 +1,5 @@
 // @ts-check
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Page,
   Layout,
@@ -24,7 +24,6 @@ export default function Pricing() {
   const app = useAppBridge();
   const fetchAuth = useAuthenticatedFetch();
   const redirect = Redirect.create(app);
-  const pendingRetryRef = useRef(false);
   const REQUEST_TIMEOUT_MS = 8000;
   const shop = (() => {
     const qs = new URLSearchParams(window.location.search);
@@ -113,13 +112,27 @@ export default function Pricing() {
       window.sessionStorage.removeItem(PENDING_PLAN_STORAGE_KEY);
     }
 
-    const authUrl = `https://${window.location.host}/api/auth?shop=${encodeURIComponent(reauthShop)}`;
+    const authUrl = `https://${window.location.host}/api/auth?shop=${encodeURIComponent(reauthShop)}&returnTo=${encodeURIComponent(returnTo)}`;
     redirect.dispatch(Redirect.Action.REMOTE, authUrl);
     return true;
   };
 
   const clearPendingPlan = () => {
     window.sessionStorage.removeItem(PENDING_PLAN_STORAGE_KEY);
+  };
+
+  const consumePendingPlanNotice = () => {
+    const pendingPlan = window.sessionStorage.getItem(PENDING_PLAN_STORAGE_KEY);
+    if (!pendingPlan) return;
+
+    clearPendingPlan();
+    setBanner({
+      msg:
+        pendingPlan === "premium"
+          ? "Authentication restored. Choose Premium again to continue to Shopify billing approval."
+          : "Authentication restored. Choose Free again to finish switching plans.",
+      status: "info",
+    });
   };
 
   const performPlanAction = async (plan) => {
@@ -173,32 +186,8 @@ export default function Pricing() {
     throw new Error("Shopify did not return a billing approval link.");
   };
 
-  const resumePendingPlan = async () => {
-    const pendingPlan = window.sessionStorage.getItem(PENDING_PLAN_STORAGE_KEY);
-    if (!pendingPlan || pendingRetryRef.current) return;
-
-    pendingRetryRef.current = true;
-    setLoading((s) => ({ ...s, action: pendingPlan }));
-
-    try {
-      await performPlanAction(pendingPlan);
-    } catch (error) {
-      clearPendingPlan();
-      setBanner({
-        msg:
-          error instanceof Error
-            ? error.message
-            : "We couldn’t resume the pending plan change.",
-        status: "critical",
-      });
-    } finally {
-      setLoading((s) => ({ ...s, action: null }));
-      pendingRetryRef.current = false;
-    }
-  };
-
   useEffect(() => {
-    resumePendingPlan();
+    consumePendingPlanNotice();
   }, []);
 
   /* ---------- Load current plan ---------- */

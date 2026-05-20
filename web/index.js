@@ -134,14 +134,17 @@ app.get(shopify.config.auth.callbackPath, async (req, res) => {
     }
 
     const host = shopify.api.utils.sanitizeHost(req.query.host);
-    const redirectUrl = await shopify.api.auth.getEmbeddedAppUrl({
+    const returnPath = sanitizeReturnPath(req.query.returnTo);
+    let redirectUrl = await shopify.api.auth.getEmbeddedAppUrl({
       rawRequest: req,
       rawResponse: res,
     });
 
+    redirectUrl = appendPathToEmbeddedUrl(redirectUrl, returnPath);
+
     if (host && !redirectUrl.includes("host=")) {
       const separator = redirectUrl.includes("?") ? "&" : "?";
-      return res.redirect(`${redirectUrl}${separator}host=${encodeURIComponent(host)}`);
+      redirectUrl = `${redirectUrl}${separator}host=${encodeURIComponent(host)}`;
     }
 
     return res.redirect(redirectUrl);
@@ -188,6 +191,39 @@ const decodeBase64Url = (value) => {
     return Buffer.from(normalized, "base64").toString("utf8");
   } catch {
     return "";
+  }
+};
+
+const sanitizeReturnPath = (value) => {
+  if (typeof value !== "string") return "";
+
+  const trimmedValue = value.trim();
+  if (!trimmedValue.startsWith("/")) return "";
+  if (trimmedValue.startsWith("//")) return "";
+
+  try {
+    const parsed = new URL(trimmedValue, "https://promomint.local");
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return "";
+  }
+};
+
+const appendPathToEmbeddedUrl = (embeddedUrl, returnPath) => {
+  if (!returnPath) return embeddedUrl;
+
+  try {
+    const embedded = new URL(embeddedUrl);
+    const destination = new URL(returnPath, `${embedded.origin}/`);
+    destination.searchParams.forEach((value, key) => {
+      if (!embedded.searchParams.has(key)) {
+        embedded.searchParams.set(key, value);
+      }
+    });
+    embedded.pathname = destination.pathname;
+    return embedded.toString();
+  } catch {
+    return embeddedUrl;
   }
 };
 
@@ -610,7 +646,7 @@ app.get("/api/createSubscription", async (req, res) => {
     const returnParams = new URLSearchParams();
     returnParams.set("shop", session.shop);
     if (hostParam) returnParams.set("host", hostParam);
-    const billingReturnUrl = `${appBase}/?${returnParams.toString()}`;
+    const billingReturnUrl = `${appBase}/pricing?${returnParams.toString()}`;
     console.log("[createSubscription] billingReturnUrl:", billingReturnUrl);
 
     let activeSession = session;
