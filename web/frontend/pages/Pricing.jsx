@@ -1,5 +1,5 @@
 // @ts-check
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Page,
   Layout,
@@ -17,10 +17,14 @@ import { Redirect } from "@shopify/app-bridge/actions";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { useAuthenticatedFetch } from "../hooks";
 
+const RETURN_TO_STORAGE_KEY = "promomint:returnTo";
+const PENDING_PLAN_STORAGE_KEY = "promomint:pendingPlan";
+
 export default function Pricing() {
   const app = useAppBridge();
   const fetchAuth = useAuthenticatedFetch();
   const redirect = Redirect.create(app);
+  const pendingRetryRef = useRef(false);
   const REQUEST_TIMEOUT_MS = 8000;
   const shop = (() => {
     const qs = new URLSearchParams(window.location.search);
@@ -94,16 +98,108 @@ export default function Pricing() {
    * through Shopify OAuth to get a fresh offline access token.
    * Returns true if a redirect was triggered (caller should bail out).
    */
-  const handleReauth = (data) => {
+  const handleReauth = (data, pendingPlan = "") => {
     if (!data?.needsReauth) return false;
 
     const reauthShop = shop || data.shop || "";
     if (!reauthShop) return false;
 
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    window.sessionStorage.setItem(RETURN_TO_STORAGE_KEY, returnTo);
+
+    if (pendingPlan) {
+      window.sessionStorage.setItem(PENDING_PLAN_STORAGE_KEY, pendingPlan);
+    } else {
+      window.sessionStorage.removeItem(PENDING_PLAN_STORAGE_KEY);
+    }
+
     const authUrl = `https://${window.location.host}/api/auth?shop=${encodeURIComponent(reauthShop)}`;
     redirect.dispatch(Redirect.Action.REMOTE, authUrl);
     return true;
   };
+
+  const clearPendingPlan = () => {
+    window.sessionStorage.removeItem(PENDING_PLAN_STORAGE_KEY);
+  };
+
+  const performPlanAction = async (plan) => {
+    if (plan === "free") {
+      const response = await fetchAuth(
+        withShopQuery("/api/cancelSubscription")
+      );
+
+      const data = await parseJsonSafe(response);
+      if (handleReauth(data, "free")) return { redirected: true };
+
+      if (!response.ok) {
+        throw new Error(
+          getErrorMessage(data, "We couldn’t switch you to the Free plan.")
+        );
+      }
+
+      clearPendingPlan();
+      await refreshTier();
+      setBanner({ msg: "Your store is now on the Free plan.", status: "success" });
+      return { redirected: false };
+    }
+
+    const res = await fetchAuth(
+      withShopQuery("/api/createSubscription?plan=premium")
+    );
+
+    const data = await parseJsonSafe(res);
+    if (handleReauth(data, "premium")) return { redirected: true };
+
+    if (!res.ok) {
+      throw new Error(
+        getErrorMessage(data, "We couldn’t start the Premium subscription.")
+      );
+    }
+
+    if (data.isActiveSubscription) {
+      clearPendingPlan();
+      await refreshTier();
+      setBanner({ msg: "Your Premium plan is already active.", status: "success" });
+      return { redirected: false };
+    }
+
+    if (data.confirmationUrl) {
+      clearPendingPlan();
+      const confirmationUrl = String(data.confirmationUrl);
+      redirect.dispatch(Redirect.Action.REMOTE, confirmationUrl);
+      return { redirected: true };
+    }
+
+    throw new Error("Shopify did not return a billing approval link.");
+  };
+
+  const resumePendingPlan = async () => {
+    const pendingPlan = window.sessionStorage.getItem(PENDING_PLAN_STORAGE_KEY);
+    if (!pendingPlan || pendingRetryRef.current) return;
+
+    pendingRetryRef.current = true;
+    setLoading((s) => ({ ...s, action: pendingPlan }));
+
+    try {
+      await performPlanAction(pendingPlan);
+    } catch (error) {
+      clearPendingPlan();
+      setBanner({
+        msg:
+          error instanceof Error
+            ? error.message
+            : "We couldn’t resume the pending plan change.",
+        status: "critical",
+      });
+    } finally {
+      setLoading((s) => ({ ...s, action: null }));
+      pendingRetryRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    resumePendingPlan();
+  }, []);
 
   /* ---------- Load current plan ---------- */
 
@@ -150,52 +246,9 @@ export default function Pricing() {
     setLoading((s) => ({ ...s, action: plan }));
 
     try {
-      if (plan === "free") {
-        const response = await fetchAuth(
-          withShopQuery("/api/cancelSubscription")
-        );
-
-        const data = await parseJsonSafe(response);
-        if (handleReauth(data)) return;
-
-        if (!response.ok) {
-          throw new Error(
-            getErrorMessage(data, "We couldn’t switch you to the Free plan.")
-          );
-        }
-
-        await refreshTier();
-        setBanner({ msg: "Your store is now on the Free plan.", status: "success" });
-        return;
-      }
-
-      const res = await fetchAuth(
-        withShopQuery("/api/createSubscription?plan=premium")
-      );
-
-      const data = await parseJsonSafe(res);
-      if (handleReauth(data)) return;
-
-      if (!res.ok) {
-        throw new Error(
-          getErrorMessage(data, "We couldn’t start the Premium subscription.")
-        );
-      }
-
-      if (data.isActiveSubscription) {
-        await refreshTier();
-        setBanner({ msg: "Your Premium plan is already active.", status: "success" });
-        return;
-      }
-
-      if (data.confirmationUrl) {
-        const confirmationUrl = String(data.confirmationUrl);
-        redirect.dispatch(Redirect.Action.REMOTE, confirmationUrl);
-        return;
-      }
-
-      throw new Error("Shopify did not return a billing approval link.");
+      await performPlanAction(plan);
     } catch (error) {
+      clearPendingPlan();
       setBanner({
         msg:
           error instanceof Error

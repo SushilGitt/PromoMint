@@ -4,7 +4,7 @@ import { readFileSync } from "fs";
 import crypto from "crypto";
 import express from "express";
 import serveStatic from "serve-static";
-import { BillingError } from "@shopify/shopify-api";
+import { BillingError, RequestedTokenType } from "@shopify/shopify-api";
 
 import shopify from "./shopify.js";
 import cancelSubscription from "./cancel-subscription.js";
@@ -229,8 +229,30 @@ const loadSessionForShop = async (shop) => {
   return null;
 };
 
+const getBearerTokenFromRequest = (req) =>
+  req.headers.authorization?.match(/Bearer (.*)/)?.[1] || "";
+
+const exchangeOfflineTokenFromRequest = async (req, shop) => {
+  const sessionToken = getBearerTokenFromRequest(req);
+  if (!sessionToken || !shop) return null;
+
+  try {
+    const { session } = await shopify.api.auth.tokenExchange({
+      shop,
+      sessionToken,
+      requestedTokenType: RequestedTokenType.OfflineAccessToken,
+    });
+
+    await shopify.config.sessionStorage.storeSession(session);
+    return session;
+  } catch (error) {
+    console.warn("[session] Token exchange failed:", error);
+    return null;
+  }
+};
+
 const getShopFromRequest = async (req) => {
-  const bearerToken = req.headers.authorization?.match(/Bearer (.*)/)?.[1];
+  const bearerToken = getBearerTokenFromRequest(req);
 
   if (bearerToken) {
     try {
@@ -252,13 +274,40 @@ const getShopFromRequest = async (req) => {
 };
 
 const getSession = async (req, res) => {
-  // Prefer the validated session from the validateAuthenticatedSession middleware
   if (res?.locals?.shopify?.session) {
     return res.locals.shopify.session;
   }
-  // Fallback: manual resolution for routes without middleware
+
   const shop = await getShopFromRequest(req);
-  return loadSessionForShop(shop);
+  const storedSession = await loadSessionForShop(shop);
+  if (storedSession?.accessToken) {
+    return storedSession;
+  }
+
+  return exchangeOfflineTokenFromRequest(req, shop);
+};
+
+const refreshSessionFromRequest = async (req, shop) => {
+  const resolvedShop = shop || (await getShopFromRequest(req));
+  if (!resolvedShop) return null;
+  return exchangeOfflineTokenFromRequest(req, resolvedShop);
+};
+
+const withSessionRefresh = async (req, session, action) => {
+  try {
+    return await action(session);
+  } catch (error) {
+    if (!isUnauthorizedError(error)) {
+      throw error;
+    }
+
+    const refreshedSession = await refreshSessionFromRequest(req, session?.shop);
+    if (!refreshedSession?.accessToken) {
+      throw error;
+    }
+
+    return action(refreshedSession);
+  }
 };
 
 app.use((req, res, next) => {
@@ -564,7 +613,12 @@ app.get("/api/createSubscription", async (req, res) => {
     const billingReturnUrl = `${appBase}/?${returnParams.toString()}`;
     console.log("[createSubscription] billingReturnUrl:", billingReturnUrl);
 
-    const billing = await BillingService.checkSubscription(session);
+    let activeSession = session;
+    const billing = await withSessionRefresh(req, session, async (resolvedSession) => {
+      activeSession = resolvedSession;
+      return BillingService.checkSubscription(resolvedSession);
+    });
+    session = activeSession;
     console.log("[createSubscription] hasActivePayment:", billing?.hasActivePayment);
 
     if (billing?.hasActivePayment) {
@@ -579,9 +633,13 @@ app.get("/api/createSubscription", async (req, res) => {
     }
 
     console.log("[createSubscription] requesting billing...");
-    const billingResponse = await BillingService.requestSubscription(
+    const billingResponse = await withSessionRefresh(
+      req,
       session,
-      billingReturnUrl
+      async (resolvedSession) => {
+        session = resolvedSession;
+        return BillingService.requestSubscription(resolvedSession, billingReturnUrl);
+      }
     );
     console.log("[createSubscription] billingResponse type:", typeof billingResponse);
 
@@ -645,13 +703,21 @@ app.get("/api/cancelSubscription", async (req, res) => {
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({ needsReauth: true });
     }
 
-    const billing = await BillingService.checkSubscription(session);
+    let activeSession = session;
+    const billing = await withSessionRefresh(req, session, async (resolvedSession) => {
+      activeSession = resolvedSession;
+      return BillingService.checkSubscription(resolvedSession);
+    });
+    session = activeSession;
 
     if (!billing?.hasActivePayment) {
       return res.send({ status: "No subscription found" });
     }
 
-    const status = await BillingService.cancel(session);
+    const status = await withSessionRefresh(req, session, async (resolvedSession) => {
+      session = resolvedSession;
+      return BillingService.cancel(resolvedSession);
+    });
 
     await MetafieldService.deleteAppMetafield(session);
     await MetafieldService.setShopMetafield(session, "free");
@@ -682,7 +748,12 @@ app.get("/api/hasActiveSubscription", async (req, res) => {
       return res.send({ hasActiveSubscription: false, tier: "free" });
     }
 
-    const tier = await SubscriptionService.getPlanTier(session);
+    let activeSession = session;
+    const tier = await withSessionRefresh(req, session, async (resolvedSession) => {
+      activeSession = resolvedSession;
+      return SubscriptionService.getPlanTier(resolvedSession);
+    });
+    session = activeSession;
 
     if (tier === "free") {
       await MetafieldService.setShopMetafield(session, "free");
