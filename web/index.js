@@ -111,11 +111,45 @@ app.use(express.urlencoded({ extended: true }));
 
 app.get(shopify.config.auth.path, shopify.auth.begin());
 
-app.get(
-  shopify.config.auth.callbackPath,
-  shopify.auth.callback(),
-  shopify.redirectToShopifyOrAppRoot()
-);
+app.get(shopify.config.auth.callbackPath, async (req, res) => {
+  try {
+    const callbackResponse = await shopify.api.auth.callback({
+      rawRequest: req,
+      rawResponse: res,
+    });
+
+    await shopify.config.sessionStorage.storeSession(callbackResponse.session);
+
+    res.locals.shopify = {
+      ...res.locals.shopify,
+      session: callbackResponse.session,
+    };
+
+    if (!callbackResponse.session.isOnline) {
+      try {
+        await shopify.api.webhooks.register({ session: callbackResponse.session });
+      } catch (error) {
+        console.warn("[auth/callback] Webhook registration failed; continuing with stored session.", error);
+      }
+    }
+
+    const host = shopify.api.utils.sanitizeHost(req.query.host);
+    const redirectUrl = await shopify.api.auth.getEmbeddedAppUrl({
+      rawRequest: req,
+      rawResponse: res,
+    });
+
+    if (host && !redirectUrl.includes("host=")) {
+      const separator = redirectUrl.includes("?") ? "&" : "?";
+      return res.redirect(`${redirectUrl}${separator}host=${encodeURIComponent(host)}`);
+    }
+
+    return res.redirect(redirectUrl);
+  } catch (error) {
+    console.error("[auth/callback] OAuth completion failed:", error);
+    res.status(500).send(error instanceof Error ? error.message : String(error));
+  }
+});
 
 /* -------------------------------------------------------------------------- */
 /*                                UTILITIES                                   */
