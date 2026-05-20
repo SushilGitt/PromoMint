@@ -1,0 +1,5 @@
+{
+  "is_public": true,
+  "public_port": 27021,
+  "public_port_timeout": 3600
+}

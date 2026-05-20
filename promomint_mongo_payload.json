@@ -1,0 +1,11 @@
+{
+  "server_uuid": "fdiih9yccsls9ejr8db8u3q9",
+  "project_uuid": "em20sg05iao829c91nn5uvm8",
+  "environment_name": "production",
+  "destination_uuid": "a1fvvoc6j4av7p48iujf5czj",
+  "name": "promomint",
+  "description": "MongoDB for PromoMint",
+  "mongo_initdb_database": "promomint",
+  "is_public": true,
+  "instant_deploy": true
+}

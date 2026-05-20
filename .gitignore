@@ -2,6 +2,7 @@
 .env
 .env.*
 
+
 # Dependency directory
 node_modules
 
