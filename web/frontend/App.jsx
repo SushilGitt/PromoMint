@@ -18,7 +18,6 @@ export default function App() {
       <AppBridgeProvider>
         <PolarisProvider>
           <QueryProvider>
-            <ResumePendingRoute />
             <ErrorBoundary>
               <NavigationMenu
                 navigationLinks={[
