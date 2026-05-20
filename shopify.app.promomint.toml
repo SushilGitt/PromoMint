@@ -5,12 +5,15 @@ name = "PromoMint"
 application_url = "https://combined-nationally-happening-moisture.trycloudflare.com"
 embedded = true
 
+[build]
+automatically_update_urls_on_dev = true
+
 [webhooks]
 api_version = "2026-07"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = ""
+scopes = "write_products,read_products"
 
 [auth]
 redirect_urls = [
@@ -18,7 +21,3 @@ redirect_urls = [
   "https://combined-nationally-happening-moisture.trycloudflare.com/auth/shopify/callback",
   "https://combined-nationally-happening-moisture.trycloudflare.com/api/auth/callback"
 ]
-
-[build]
-include_config_on_deploy = true
-automatically_update_urls_on_dev = true

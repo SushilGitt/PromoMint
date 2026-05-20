@@ -525,7 +525,7 @@ app.get("/api/scroll-to-top/hasSubscription", async (req, res) => {
 /*                         CREATE SUBSCRIPTION                                */
 /* -------------------------------------------------------------------------- */
 
-app.get("/api/createSubscription", async (req, res) => {
+app.get("/api/createSubscription", shopify.validateAuthenticatedSession(), async (req, res) => {
   let session;
 
   try {
@@ -626,7 +626,7 @@ app.get("/api/createSubscription", async (req, res) => {
 /*                         CANCEL SUBSCRIPTION                                */
 /* -------------------------------------------------------------------------- */
 
-app.get("/api/cancelSubscription", async (req, res) => {
+app.get("/api/cancelSubscription", shopify.validateAuthenticatedSession(), async (req, res) => {
   let session;
 
   try {
@@ -663,7 +663,7 @@ app.get("/api/cancelSubscription", async (req, res) => {
 /*                        CHECK ACTIVE SUBSCRIPTION                           */
 /* -------------------------------------------------------------------------- */
 
-app.get("/api/hasActiveSubscription", async (req, res) => {
+app.get("/api/hasActiveSubscription", shopify.validateAuthenticatedSession(), async (req, res) => {
   let session;
 
   try {
@@ -696,7 +696,7 @@ app.get("/api/hasActiveSubscription", async (req, res) => {
 /*                                SHOP INFO                                   */
 /* -------------------------------------------------------------------------- */
 
-app.get("/api/getshop", async (req, res) => {
+app.get("/api/getshop", shopify.validateAuthenticatedSession(), async (req, res) => {
   const session = await getSession(req, res);
   res.json({ shop: session?.shop || null });
 });

@@ -23,9 +23,9 @@ export default function HomePage() {
                 so customers can spot available savings and copy codes quickly.
               </p>
               <p style={{ color: promoMintColors.mutedText }}>
-                To get started, open your theme editor, add the PromoMint app
-                block to your product template, and update the offer text and
-                coupon codes you want to show.
+                To get started, open your theme editor, open a product
+                template, add the PromoMint Coupon Offers app block, and update
+                the offer text and coupon codes you want to show.
               </p>
             </TextContainer>
           </Card>
@@ -35,9 +35,9 @@ export default function HomePage() {
           <Card sectioned title="Getting started" style={promoMintStyles.accentCard}>
             <TextContainer spacing="loose">
               <p style={{ color: promoMintColors.mutedText }}>
-                Open your live theme in the editor, place the PromoMint block on
-                the product template, and save the offer details you want
-                customers to see.
+                Open your live theme in the editor, place the PromoMint Coupon
+                Offers app block on the product template, and save the offer
+                details you want customers to see.
               </p>
             </TextContainer>
           </Card>

@@ -1,30 +1,20 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "2857e79c388115061287c3da521a35b8"
+client_id = "0389ad7b1333114bcd48c781c6089a86"
+name = "PromoMint"
 application_url = "https://combined-nationally-happening-moisture.trycloudflare.com"
 embedded = true
-name = "PromoLoom"
-handle = "staging-76"
 
 [build]
 automatically_update_urls_on_dev = true
-dev_store_url = "devstore0-3.myshopify.com"
+include_config_on_deploy = true
 
 [webhooks]
-api_version = "2022-10"
-
-  [[webhooks.subscriptions]]
-  uri = "https://combined-nationally-happening-moisture.trycloudflare.com/api/webhooks"
-  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
-
-  [[webhooks.subscriptions]]
-  topics = [ "app_subscriptions/update" ]
-  uri = "https://combined-nationally-happening-moisture.trycloudflare.com/api/webhooks"
+api_version = "2026-07"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-
-use_legacy_install_flow = true
+scopes = ""
 
 [auth]
 redirect_urls = [
@@ -32,11 +22,3 @@ redirect_urls = [
   "https://combined-nationally-happening-moisture.trycloudflare.com/auth/shopify/callback",
   "https://combined-nationally-happening-moisture.trycloudflare.com/api/auth/callback"
 ]
-
-[app_proxy]
-url = "https://combined-nationally-happening-moisture.trycloudflare.com/api/scroll-to-top"
-subpath = "scroll-to-top"
-prefix = "apps"
-
-[pos]
-embedded = false
