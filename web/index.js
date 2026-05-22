@@ -72,6 +72,12 @@ const HTTP_STATUS = {
   INTERNAL_SERVER_ERROR: 500,
 };
 
+const REQUIRED_WEBHOOK_TOPICS = [
+  "CUSTOMERS_DATA_REQUEST",
+  "CUSTOMERS_REDACT",
+  "SHOP_REDACT",
+];
+
 /* -------------------------------------------------------------------------- */
 /*                               EXPRESS SERVER                               */
 /* -------------------------------------------------------------------------- */
@@ -126,10 +132,20 @@ app.get(shopify.config.auth.callbackPath, async (req, res) => {
     };
 
     if (!callbackResponse.session.isOnline) {
-      try {
-        await shopify.api.webhooks.register({ session: callbackResponse.session });
-      } catch (error) {
-        console.warn("[auth/callback] Webhook registration failed; continuing with stored session.", error);
+      const registrationResult = await shopify.api.webhooks.register({
+        session: callbackResponse.session,
+      });
+      const failedTopics = getFailedWebhookTopics(registrationResult);
+
+      if (failedTopics.length) {
+        console.error("[auth/callback] Mandatory webhook registration failed:", {
+          shop: callbackResponse.session.shop,
+          failedTopics,
+          registrationResult,
+        });
+        return res
+          .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
+          .send("Mandatory Shopify compliance webhook registration failed.");
       }
     }
 
@@ -226,6 +242,12 @@ const appendPathToEmbeddedUrl = (embeddedUrl, returnPath) => {
     return embeddedUrl;
   }
 };
+
+const getFailedWebhookTopics = (registrationResult) =>
+  REQUIRED_WEBHOOK_TOPICS.filter((topic) => {
+    const results = registrationResult?.[topic];
+    return !Array.isArray(results) || results.some((result) => !result?.success);
+  });
 
 const getShopFromHostParam = (hostParam) => {
   const decodedHost = decodeBase64Url(hostParam);

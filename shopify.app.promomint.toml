@@ -2,7 +2,7 @@
 
 client_id = "0389ad7b1333114bcd48c781c6089a86"
 name = "PromoMint"
-application_url = "https://combined-nationally-happening-moisture.trycloudflare.com"
+application_url = "https://c83t46y950m5qfhejdqsjqnm.91.239.208.85.sslip.io"
 embedded = true
 
 [build]
@@ -21,7 +21,7 @@ scopes = "write_products,read_products"
 
 [auth]
 redirect_urls = [
-  "https://combined-nationally-happening-moisture.trycloudflare.com/auth/callback",
-  "https://combined-nationally-happening-moisture.trycloudflare.com/auth/shopify/callback",
-  "https://combined-nationally-happening-moisture.trycloudflare.com/api/auth/callback"
+  "https://c83t46y950m5qfhejdqsjqnm.91.239.208.85.sslip.io/auth/callback",
+  "https://c83t46y950m5qfhejdqsjqnm.91.239.208.85.sslip.io/auth/shopify/callback",
+  "https://c83t46y950m5qfhejdqsjqnm.91.239.208.85.sslip.io/api/auth/callback"
 ]
