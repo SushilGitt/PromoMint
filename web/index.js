@@ -337,12 +337,21 @@ const getSession = async (req, res) => {
   }
 
   const shop = await getShopFromRequest(req);
+  const sessionToken = getBearerTokenFromRequest(req);
+
+  if (sessionToken && shop) {
+    const exchangedSession = await exchangeOfflineTokenFromRequest(req, shop);
+    if (exchangedSession?.accessToken) {
+      return exchangedSession;
+    }
+  }
+
   const storedSession = await loadSessionForShop(shop);
   if (storedSession?.accessToken) {
     return storedSession;
   }
 
-  return exchangeOfflineTokenFromRequest(req, shop);
+  return null;
 };
 
 const refreshSessionFromRequest = async (req, shop) => {
@@ -843,6 +852,13 @@ app.get("/api/hasActiveSubscription", async (req, res) => {
     session = await getSession(req, res);
 
     if (!session) {
+      const shop = await getShopFromRequest(req);
+      if (shop) {
+        return res
+          .status(HTTP_STATUS.UNAUTHORIZED)
+          .json({ needsReauth: true, shop });
+      }
+
       return res.send({ hasActiveSubscription: false, tier: "free" });
     }
 
