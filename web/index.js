@@ -863,6 +863,25 @@ app.get("/api/hasActiveSubscription", async (req, res) => {
 
     res.send({ hasActiveSubscription: true, tier });
   } catch (err) {
+    if (err instanceof BillingError) {
+      const details = formatBillingErrorDetails(err.errorData);
+
+      console.error("Active subscription check failed", {
+        shop: session?.shop,
+        statusCode: getErrorStatusCode(err),
+        errorData: err.errorData,
+      });
+
+      if (isBillingScopeError(err)) {
+        return sendBillingReauthorizationRequired(res, session?.shop, details);
+      }
+
+      return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+        error: details[0] || err.message,
+        details,
+      });
+    }
+
     if (isUnauthorizedError(err)) {
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({ needsReauth: true, shop: session?.shop });
     }
