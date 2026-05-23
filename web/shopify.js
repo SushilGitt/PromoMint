@@ -9,6 +9,10 @@ import {
 } from "./mongo-config.js";
 const PREMIUM_PLAN = "Premium";
 const PREMIUM_PLAN_PRICE = 19;
+const REQUIRED_BILLING_SCOPES = [
+  "read_own_subscription",
+  "write_own_subscription",
+];
 const shopifyHost = process.env.HOST?.replace(/https?:\/\//, "");
 const shopifyScopes = (process.env.SCOPES || "")
   .split(",")
@@ -29,6 +33,16 @@ if (!shopifyHost) {
 
 if (!shopifyScopes.length) {
   throw new Error("Missing SCOPES configuration for Shopify app setup.");
+}
+
+const missingBillingScopes = REQUIRED_BILLING_SCOPES.filter(
+  (scope) => !shopifyScopes.includes(scope)
+);
+
+if (missingBillingScopes.length) {
+  throw new Error(
+    `Missing required Shopify billing scopes: ${missingBillingScopes.join(", ")}. Update SCOPES and reinstall or reauthorize the app.`
+  );
 }
 
 const shopify = shopifyApp({

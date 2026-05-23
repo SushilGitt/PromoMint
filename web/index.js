@@ -395,18 +395,25 @@ app.use((req, res, next) => {
   return res.redirect(302, redirectUrl.toString());
 });
 
-const isUnauthorizedError = (err) =>
-  err?.response?.code === 401 ||
-  err?.response?.code === 403 ||
-  err?.code === 401 ||
-  err?.code === 403 ||
-  err?.statusCode === 401 ||
-  err?.statusCode === 403 ||
-  (typeof err?.message === "string" &&
-    (err.message.includes("401") ||
-      err.message.includes("403") ||
-      err.message.toLowerCase().includes("unauthorized") ||
-      err.message.toLowerCase().includes("forbidden")));
+const getErrorStatusCode = (err) =>
+  err?.response?.code || err?.code || err?.statusCode || null;
+
+const isUnauthorizedError = (err) => {
+  const statusCode = getErrorStatusCode(err);
+  if (statusCode === 401) return true;
+  if (statusCode === 403 && !isBillingScopeError(err)) return true;
+
+  if (typeof err?.message !== "string") return false;
+
+  const message = err.message.toLowerCase();
+  if (message.includes("401") || message.includes("unauthorized")) {
+    return true;
+  }
+
+  return message.includes("403") || message.includes("forbidden")
+    ? !isBillingScopeError(err)
+    : false;
+};
 
 const formatBillingErrorDetails = (errorData = []) =>
   errorData
@@ -417,8 +424,36 @@ const formatBillingErrorDetails = (errorData = []) =>
     })
     .filter(Boolean);
 
+const isBillingScopeError = (err) => {
+  if (!(err instanceof BillingError)) return false;
+  if (getErrorStatusCode(err) !== 403) return false;
+
+  const messageParts = [err.message, ...formatBillingErrorDetails(err.errorData)]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    messageParts.includes("forbidden") ||
+    messageParts.includes("scope") ||
+    messageParts.includes("subscription") ||
+    messageParts.includes("permission")
+  );
+};
+
+const sendBillingReauthorizationRequired = (res, shop, details = []) =>
+  res.status(HTTP_STATUS.UNAUTHORIZED).json({
+    needsReauth: true,
+    requiresBillingScopes: true,
+    shop,
+    error:
+      "Shopify billing approval needs fresh app authorization with subscription scopes. Reinstall or reauthorize the app, then try Premium again.",
+    details,
+  });
+
 /* -------------------------------------------------------------------------- */
 /*                               BILLING SERVICE                              */
+/* -------------------------------------------------------------------------- */
 /* -------------------------------------------------------------------------- */
 
 const BillingService = {
@@ -722,25 +757,30 @@ app.get("/api/createSubscription", async (req, res) => {
     const error = err instanceof Error ? err : new Error(String(err));
     console.error("[createSubscription] error:", error.message, err);
 
-    if (isUnauthorizedError(err)) {
-      return res
-        .status(HTTP_STATUS.UNAUTHORIZED)
-        .json({ needsReauth: true, shop: session?.shop });
-    }
-
     if (err instanceof BillingError) {
       const details = formatBillingErrorDetails(err.errorData);
 
       console.error("Billing request failed", {
         plan: PREMIUM_PLAN,
         shop: session?.shop,
+        statusCode: getErrorStatusCode(err),
         errorData: err.errorData,
       });
+
+      if (isBillingScopeError(err)) {
+        return sendBillingReauthorizationRequired(res, session?.shop, details);
+      }
 
       return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
         error: details[0] || err.message,
         details,
       });
+    }
+
+    if (isUnauthorizedError(err)) {
+      return res
+        .status(HTTP_STATUS.UNAUTHORIZED)
+        .json({ needsReauth: true, shop: session?.shop });
     }
 
     handleError(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, error.message);
