@@ -46,6 +46,10 @@ function useRoutes(pages) {
          */
         .replace(/\/index$/i, "/")
         /**
+         * Normalize Shopify's built-in exitiframe route.
+         */
+        .replace(/^\/ExitIframe$/i, "/exitiframe")
+        /**
          * Only lowercase the first letter. This allows the developer to use camelCase
          * dynamic paths while ensuring their standard routes are normalized to lowercase.
          */
