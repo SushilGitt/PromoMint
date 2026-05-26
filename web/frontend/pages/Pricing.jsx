@@ -1,5 +1,5 @@
 // @ts-check
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Page,
   Layout,
@@ -18,43 +18,70 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { useAuthenticatedFetch } from "../hooks";
 
 const PENDING_PLAN_STORAGE_KEY = "promomint:pendingPlan";
-const REQUEST_TIMEOUT_MS = 8000;
+const RETURN_TO_STORAGE_KEY = "promomint:returnTo";
+const REQUEST_TIMEOUT_MS = 15000;
+
+const decodeHost = (host) => {
+  if (!host) return "";
+
+  try {
+    return atob(host.replace(/-/g, "+").replace(/_/g, "/"));
+  } catch {
+    return "";
+  }
+};
+
+const getCurrentParams = () => new URLSearchParams(window.location.search);
+
+const getCurrentHost = () =>
+  getCurrentParams().get("host") || window.__SHOPIFY_DEV_HOST || "";
+
+const getCurrentShop = () => {
+  const params = getCurrentParams();
+  const fromUrl = params.get("shop");
+  if (fromUrl) return fromUrl;
+
+  const decoded = decodeHost(getCurrentHost());
+  if (!decoded) return "";
+
+  const adminStoreMatch = decoded.match(/\/store\/([^/?]+)/);
+  if (adminStoreMatch?.[1]) {
+    return `${adminStoreMatch[1]}.myshopify.com`;
+  }
+
+  const directShopMatch = decoded.match(
+    /([a-z0-9][a-z0-9-]*\.myshopify\.com)/i
+  );
+
+  return directShopMatch?.[1] || "";
+};
+
+const getBillingReturnState = () => {
+  const params = getCurrentParams();
+  return {
+    isBillingReturn: params.get("billingReturn") === "1",
+    plan: params.get("plan") || "",
+  };
+};
 
 export default function Pricing() {
   const app = useAppBridge();
   const fetchAuth = useAuthenticatedFetch();
   const redirect = Redirect.create(app);
+  const resumeAttemptedRef = useRef(false);
 
-  const shop = (() => {
-    const qs = new URLSearchParams(window.location.search);
-    const fromUrl = qs.get("shop");
-    if (fromUrl) return fromUrl;
-
-    try {
-      const host = qs.get("host") || window.__SHOPIFY_DEV_HOST;
-      if (host) {
-        const decoded = atob(host);
-        const match = decoded.match(/\/store\/([^/]+)/);
-        if (match) return `${match[1]}.myshopify.com`;
-      }
-    } catch {
-      return "";
-    }
-
-    return "";
-  })();
-
-  const host = (() => {
-    const qs = new URLSearchParams(window.location.search);
-    return qs.get("host") || window.__SHOPIFY_DEV_HOST || "";
-  })();
+  const shop = getCurrentShop();
+  const host = getCurrentHost();
+  const billingReturnState = getBillingReturnState();
 
   const tick = useMemo(
     () => <Icon source={CircleTickMinor} color="success" />,
     []
   );
 
-  const [serverTier, setServerTier] = useState(/** @type {"free" | "premium" | null} */ (null));
+  const [serverTier, setServerTier] = useState(
+    /** @type {"free" | "premium" | null} */ (null)
+  );
   const [loading, setLoading] = useState({ page: true, action: null });
   const [confirm, setConfirm] = useState({ open: false, target: null });
   const [banner, setBanner] = useState({ msg: "", status: null });
@@ -99,18 +126,41 @@ export default function Pricing() {
     window.sessionStorage.removeItem(PENDING_PLAN_STORAGE_KEY);
   };
 
-  const consumePendingPlanNotice = () => {
-    const pendingPlan = window.sessionStorage.getItem(PENDING_PLAN_STORAGE_KEY);
+  const getPendingPlan = () =>
+    window.sessionStorage.getItem(PENDING_PLAN_STORAGE_KEY) || "";
+
+  const showResumeBanner = (pendingPlan) => {
     if (!pendingPlan) return;
 
-    clearPendingPlan();
     setBanner({
       msg:
         pendingPlan === "premium"
-          ? "Authentication restored. Continue with Premium to open Shopify billing approval."
-          : "Authentication restored. Continue with Free to finish switching plans.",
+          ? "Authentication restored. Resuming the Premium billing flow."
+          : "Authentication restored. Resuming the Free plan change.",
       status: "info",
     });
+  };
+
+  const clearReturnToRoute = () => {
+    window.sessionStorage.removeItem(RETURN_TO_STORAGE_KEY);
+  };
+
+  const clearPendingBillingResume = () => {
+    clearPendingPlan();
+    clearReturnToRoute();
+  };
+
+  const clearBillingReturnParams = () => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("billingReturn") && !params.has("plan")) {
+      return;
+    }
+
+    params.delete("billingReturn");
+    params.delete("plan");
+    const nextQuery = params.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
+    window.history.replaceState({}, "", nextUrl);
   };
 
   const handleAuthResponse = (response, data, fallback) => {
@@ -140,53 +190,64 @@ export default function Pricing() {
     return { response, data };
   };
 
-  const performPlanAction = async (plan) => {
-    if (plan === "free") {
-      const response = await fetchAuth(withShopQuery("/api/cancelSubscription"), {
-        reauthPlan: "free",
-      });
-      const data = await parseJsonSafe(response);
+  const postPlanAction = async (path, plan, fallback) => {
+    const response = await fetchAuth(withShopQuery(path), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ plan, host }),
+      reauthPlan: plan,
+    });
+    const data = await parseJsonSafe(response);
+    handleAuthResponse(response, data, fallback);
+    return data;
+  };
 
-      handleAuthResponse(response, data, "We couldn’t switch you to the Free plan.");
+  const performPlanAction = async (plan, { silent = false } = {}) => {
+    if (plan === "free") {
+      const data = await postPlanAction(
+        "/api/cancelSubscription",
+        "free",
+        "We couldn’t switch you to the Free plan."
+      );
 
       if (data?.tier !== "free") {
         throw new Error("The Free plan could not be confirmed after cancellation.");
       }
 
-      clearPendingPlan();
+      clearPendingBillingResume();
       setServerTier("free");
-      setBanner({ msg: "Your store is now on the Free plan.", status: "success" });
-      return { redirected: false };
+      if (!silent) {
+        setBanner({ msg: "Your store is now on the Free plan.", status: "success" });
+      }
+      return { redirected: false, tier: data.tier };
     }
 
-    const response = await fetchAuth(withShopQuery("/api/createSubscription?plan=premium"), {
-      reauthPlan: "premium",
-    });
-    const data = await parseJsonSafe(response);
-
-    handleAuthResponse(
-      response,
-      data,
+    const data = await postPlanAction(
+      "/api/createSubscription",
+      "premium",
       "We couldn’t start the Premium subscription."
     );
 
     if (data.isActiveSubscription) {
-      clearPendingPlan();
+      clearPendingBillingResume();
       setServerTier("premium");
-      setBanner({ msg: "Your Premium plan is already active.", status: "success" });
-      return { redirected: false };
+      if (!silent) {
+        setBanner({ msg: "Your Premium plan is already active.", status: "success" });
+      }
+      return { redirected: false, tier: data.tier };
     }
 
     if (data.confirmationUrl) {
-      clearPendingPlan();
       redirect.dispatch(Redirect.Action.REMOTE, String(data.confirmationUrl));
-      return { redirected: true };
+      return { redirected: true, tier: data.tier };
     }
 
     throw new Error("Shopify did not return a billing approval link.");
   };
 
-  async function refreshTier() {
+  async function refreshTier({ allowSoftFailure = false } = {}) {
     try {
       setLoading((s) => ({ ...s, page: true }));
 
@@ -210,28 +271,107 @@ export default function Pricing() {
       }
 
       setServerTier(data.tier);
-      setBanner((currentBanner) =>
-        currentBanner.status === "critical"
-          ? { msg: "", status: null }
-          : currentBanner
-      );
-    } catch (error) {
-      setServerTier(null);
-      setBanner({
-        msg:
-          error instanceof Error
-            ? error.message
-            : "We couldn’t confirm your current plan.",
-        status: "critical",
+      setBanner((currentBanner) => {
+        if (currentBanner.status === "critical") {
+          return { msg: "", status: null };
+        }
+
+        return currentBanner;
       });
+
+      return data.tier;
+    } catch (error) {
+      if (!allowSoftFailure) {
+        setServerTier(null);
+        setBanner({
+          msg:
+            error instanceof Error
+              ? error.message
+              : "We couldn’t confirm your current plan.",
+          status: "critical",
+        });
+      } else {
+        setBanner({
+          msg:
+            error instanceof Error
+              ? `${error.message} We’ll keep your previous plan selection visible while you retry.`
+              : "We couldn’t confirm your current plan yet.",
+          status: "warning",
+        });
+      }
+
+      return null;
     } finally {
       setLoading((s) => ({ ...s, page: false }));
     }
   }
 
   useEffect(() => {
-    consumePendingPlanNotice();
-    refreshTier();
+    const pendingPlan = getPendingPlan();
+
+    const initialize = async () => {
+      if (pendingPlan && !billingReturnState.isBillingReturn) {
+        showResumeBanner(pendingPlan);
+      }
+
+      const tier = await refreshTier({
+        allowSoftFailure: billingReturnState.isBillingReturn || !!pendingPlan,
+      });
+
+      if (billingReturnState.isBillingReturn) {
+        clearBillingReturnParams();
+
+        if (tier === "premium") {
+          clearPendingBillingResume();
+          setBanner({
+            msg: "Premium billing approved. Your store is now on the Premium plan.",
+            status: "success",
+          });
+          return;
+        }
+
+        clearPendingBillingResume();
+        setBanner({
+          msg:
+            "We returned from Shopify billing, but Premium is not active yet. Review the approval result and try again if needed.",
+          status: "warning",
+        });
+        return;
+      }
+
+      if (pendingPlan && !resumeAttemptedRef.current) {
+        resumeAttemptedRef.current = true;
+
+        try {
+          setLoading((s) => ({ ...s, action: pendingPlan }));
+          const result = await performPlanAction(pendingPlan, { silent: true });
+
+          if (!result.redirected) {
+            await refreshTier({ allowSoftFailure: true });
+            setBanner({
+              msg:
+                pendingPlan === "premium"
+                  ? "Premium plan restored after reauthorization."
+                  : "Free plan restored after reauthorization.",
+              status: "success",
+            });
+          }
+        } catch (error) {
+          clearPendingBillingResume();
+          setBanner({
+            msg:
+              error instanceof Error
+                ? error.message
+                : "We couldn’t resume your plan change after reauthorization.",
+            status: "critical",
+          });
+        } finally {
+          setLoading((s) => ({ ...s, action: null }));
+        }
+      }
+    };
+
+    initialize();
   }, []);
 
   const openConfirm = (plan) => {
@@ -252,7 +392,7 @@ export default function Pricing() {
     try {
       const result = await performPlanAction(plan);
       if (!result.redirected) {
-        await refreshTier();
+        await refreshTier({ allowSoftFailure: true });
       }
     } catch (error) {
       clearPendingPlan();

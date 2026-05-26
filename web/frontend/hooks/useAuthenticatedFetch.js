@@ -143,6 +143,16 @@ function getCurrentRoute() {
   return `${window.location.pathname}${window.location.search}`;
 }
 
+function decodeHost(host) {
+  if (!host) return "";
+
+  try {
+    return atob(host.replace(/-/g, "+").replace(/_/g, "/"));
+  } catch {
+    return "";
+  }
+}
+
 function getCurrentHost() {
   const qs = new URLSearchParams(window.location.search);
   return qs.get("host") || window.__SHOPIFY_DEV_HOST || "";
@@ -153,16 +163,19 @@ function getCurrentShop() {
   const fromUrl = qs.get("shop");
   if (fromUrl) return fromUrl;
 
-  try {
-    const host = getCurrentHost();
-    if (!host) return "";
+  const decoded = decodeHost(getCurrentHost());
+  if (!decoded) return "";
 
-    const decoded = atob(host);
-    const match = decoded.match(/\/store\/([^/]+)/);
-    return match ? `${match[1]}.myshopify.com` : "";
-  } catch {
-    return "";
+  const adminStoreMatch = decoded.match(/\/store\/([^/?]+)/);
+  if (adminStoreMatch?.[1]) {
+    return `${adminStoreMatch[1]}.myshopify.com`;
   }
+
+  const directShopMatch = decoded.match(
+    /([a-z0-9][a-z0-9-]*\.myshopify\.com)/i
+  );
+
+  return directShopMatch?.[1] || "";
 }
 
 function getRecentReauthAttempt() {

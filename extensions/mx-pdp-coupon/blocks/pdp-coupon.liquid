@@ -1,7 +1,7 @@
 {% assign plan = shop.metafields.custom["mx-pdp-coupon"] %}
 
 {% assign is_premium = false %}
-{% if plan == 'Basic' or plan == 'premium' %}
+{% if plan == 'premium' %}
   {% assign is_premium = true %}
 {% endif %}
 

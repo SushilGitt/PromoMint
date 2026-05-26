@@ -3,8 +3,15 @@ import shopify from "./shopify.js";
 
 const PREMIUM_PLAN = "Premium";
 
-export default async function cancelSubscription(session) {
-  const subscriptionId = await getActiveSubscriptionId(session);
+export default async function cancelSubscription(
+  session,
+  { expectedTestMode } = {}
+) {
+  const subscriptions = await getActiveSubscriptions(session);
+  const subscriptionId = getActiveSubscriptionId(subscriptions, {
+    expectedTestMode,
+  });
+
   if (!subscriptionId) {
     throw new Error("No active Premium subscription ID found for cancellation.");
   }
@@ -12,22 +19,50 @@ export default async function cancelSubscription(session) {
   return appSubscriptionCancel(session, subscriptionId);
 }
 
-async function getActiveSubscriptionId(session) {
+export async function getActiveSubscriptions(session) {
   const client = new shopify.api.clients.Graphql({ session });
 
   const currentInstallations = await client.query({
     data: RECURRING_PURCHASES_QUERY,
   });
 
-  const subscriptions =
-    currentInstallations.body.data?.currentAppInstallation?.activeSubscriptions || [];
+  return (
+    currentInstallations.body.data?.currentAppInstallation?.activeSubscriptions || []
+  );
+}
 
-  const matchingSubscription = subscriptions.find(
+function getActiveSubscriptionId(subscriptions, { expectedTestMode } = {}) {
+  const matchingSubscriptions = subscriptions.filter(
     (subscription) => subscription?.name === PREMIUM_PLAN
   );
 
-  if (matchingSubscription?.id) {
-    return matchingSubscription.id;
+  if (typeof expectedTestMode === "boolean") {
+    const matchingModeSubscription = matchingSubscriptions.find(
+      (subscription) => subscription?.test === expectedTestMode
+    );
+
+    if (matchingModeSubscription?.id) {
+      return matchingModeSubscription.id;
+    }
+
+    const oppositeModeSubscription = matchingSubscriptions.find(
+      (subscription) =>
+        typeof subscription?.test === "boolean" &&
+        subscription.test !== expectedTestMode
+    );
+
+    if (oppositeModeSubscription) {
+      const expectedMode = expectedTestMode ? "TEST" : "LIVE";
+      const actualMode = oppositeModeSubscription.test ? "TEST" : "LIVE";
+
+      throw new Error(
+        `An active Premium subscription was found in ${actualMode} mode, but the app is running in ${expectedMode} mode. Update SHOPIFY_BILLING_TEST_MODE so the billing mode matches before cancelling.`
+      );
+    }
+  }
+
+  if (matchingSubscriptions[0]?.id) {
+    return matchingSubscriptions[0].id;
   }
 
   if (subscriptions.length > 0) {

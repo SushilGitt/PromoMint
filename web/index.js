@@ -7,7 +7,9 @@ import serveStatic from "serve-static";
 import { BillingError, RequestedTokenType } from "@shopify/shopify-api";
 
 import shopify from "./shopify.js";
-import cancelSubscription from "./cancel-subscription.js";
+import cancelSubscription, {
+  getActiveSubscriptions,
+} from "./cancel-subscription.js";
 import GDPRWebhookHandlers from "./gdpr.js";
 import "./env.js";
 
@@ -402,9 +404,257 @@ const buildPricingReturnUrl = (req, shop, hostParam) => {
   const returnParams = new URLSearchParams();
   returnParams.set("shop", shop);
   returnParams.set("host", sanitizedHost);
+  returnParams.set("billingReturn", "1");
+  returnParams.set("plan", PREMIUM_PLAN_SLUG);
 
   return `${appBase}/pricing?${returnParams.toString()}`;
 };
+
+const getBillingModeLabel = (isTest) => (isTest ? "TEST" : "LIVE");
+
+const normalizeSubscriptionMode = (subscription) => {
+  if (typeof subscription?.test === "boolean") {
+    return subscription.test;
+  }
+
+  return null;
+};
+
+const findModeMismatchSubscription = (subscriptions = []) =>
+  subscriptions.find((subscription) => {
+    if (subscription?.name !== PREMIUM_PLAN) {
+      return false;
+    }
+
+    const mode = normalizeSubscriptionMode(subscription);
+    return mode !== null && mode !== BILLING_IS_TEST;
+  }) || null;
+
+const buildModeMismatchDetails = (subscription) => {
+  if (!subscription) {
+    return [];
+  }
+
+  return [
+    `An active ${PREMIUM_PLAN} subscription exists in ${getBillingModeLabel(subscription.test)} mode while this app is running in ${getBillingModeLabel(BILLING_IS_TEST)} mode. Update ${BILLING_TEST_MODE_ENV} so both modes match.`,
+  ];
+};
+
+const sendBillingModeMismatch = (res, details, extra = {}) =>
+  res.status(HTTP_STATUS.BAD_REQUEST).json({
+    billingModeMismatch: true,
+    mode: getBillingModeLabel(BILLING_IS_TEST),
+    details,
+    error: details[0],
+    ...extra,
+  });
+
+const syncTierMetafield = async (session, tier, options = {}) => {
+  const { ensureInstallation = false, deleteInstallation = false } = options;
+
+  try {
+    if (ensureInstallation) {
+      await MetafieldService.ensureAppMetafield(session);
+    }
+
+    if (deleteInstallation) {
+      await MetafieldService.deleteAppMetafield(session);
+    }
+
+    await MetafieldService.setShopMetafield(session, tier);
+    return { ok: true };
+  } catch (error) {
+    console.error("[metafield] Subscription tier sync failed", {
+      shop: session?.shop,
+      tier,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+};
+
+const checkBillingState = async (req, session) => {
+  let resolvedSession = session;
+  const billing = await withSessionRefresh(req, session, async (nextSession) => {
+    resolvedSession = nextSession;
+    return BillingService.checkSubscription(nextSession);
+  });
+
+  let mismatchSubscription = null;
+  if (!billing?.hasActivePayment) {
+    const subscriptions = await withSessionRefresh(
+      req,
+      resolvedSession,
+      async (nextSession) => {
+        resolvedSession = nextSession;
+        return getActiveSubscriptions(nextSession);
+      }
+    );
+
+    mismatchSubscription = findModeMismatchSubscription(subscriptions);
+  }
+
+  return {
+    session: resolvedSession,
+    billing,
+    mismatchSubscription,
+  };
+};
+
+const withBillingErrorHandling = async (req, res, session, err, contextLabel) => {
+  if (err instanceof BillingError) {
+    const details = formatBillingErrorDetails(err.errorData);
+
+    console.error(`${contextLabel} failed`, {
+      shop: session?.shop,
+      statusCode: getErrorStatusCode(err),
+      errorData: err.errorData,
+    });
+
+    if (isBillingScopeError(err)) {
+      const reauthShop = await resolveReauthShop(req, session);
+      return sendBillingReauthorizationRequired(res, reauthShop, details);
+    }
+
+    return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+      error: details[0] || err.message,
+      details,
+    });
+  }
+
+  if (isUnauthorizedError(err)) {
+    return sendReauthorizationRequired(req, res, session);
+  }
+
+  const error = err instanceof Error ? err : new Error(String(err));
+  return handleError(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, error.message);
+};
+
+const getEmbeddedParam = (source, key) => {
+  const value = source?.[key];
+  return typeof value === "string" ? value.trim() : "";
+};
+
+const buildEmbeddedParams = (source = {}) => {
+  const params = new URLSearchParams();
+  const shop = getEmbeddedParam(source, "shop");
+  const host = getEmbeddedParam(source, "host");
+
+  if (shop) {
+    params.set("shop", shop);
+  }
+
+  if (host) {
+    params.set("host", host);
+  }
+
+  return params;
+};
+
+const sendPlanResponse = (res, payload, metafieldSync) =>
+  res.send({
+    ...payload,
+    billingMode: getBillingModeLabel(BILLING_IS_TEST),
+    metafieldSync,
+  });
+
+const getRequestedPlan = (req) => {
+  const source = req.method === "POST" ? req.body : req.query;
+  return String(source?.plan || "").toLowerCase();
+};
+
+const getHostFromRequest = (req) => {
+  const queryHost = getEmbeddedParam(req.query, "host");
+  if (queryHost) {
+    return queryHost;
+  }
+
+  return getEmbeddedParam(req.body, "host");
+};
+
+const requireAuthenticatedBillingSession = async (req, res, next) => {
+  try {
+    if (!getBearerTokenFromRequest(req)) {
+      return sendReauthorizationRequired(req, res, null, {
+        error: "Authentication context is missing. Reopen the app from Shopify admin and try again.",
+      });
+    }
+
+    return shopify.validateAuthenticatedSession()(req, res, next);
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const runBillingEndpoint = (handler, { requireValidatedSession = false } = {}) => {
+  const middleware = [];
+
+  if (requireValidatedSession) {
+    middleware.push(requireAuthenticatedBillingSession);
+  }
+
+  middleware.push(async (req, res) => {
+    let session;
+
+    try {
+      session = await getSession(req, res);
+
+      if (!session) {
+        return sendReauthorizationRequired(req, res, session, {
+          error: "Authentication context is missing. Reopen the app from Shopify admin and try again.",
+        });
+      }
+
+      return await handler(req, res, session);
+    } catch (err) {
+      return withBillingErrorHandling(req, res, session, err, "Billing request");
+    }
+  });
+
+  return middleware;
+};
+
+const respondUnsupportedBillingMethod = (res, allowedMethod) =>
+  res.status(405).json({
+    error: `Use ${allowedMethod} for this billing action.`,
+  });
+
+const bridgeBillingGetToPost = (allowedMethod) => async (req, res) => {
+  if (allowedMethod !== "POST") {
+    return respondUnsupportedBillingMethod(res, allowedMethod);
+  }
+
+  const embeddedParams = buildEmbeddedParams(req.query);
+  const plan = getRequestedPlan(req);
+  if (plan) {
+    embeddedParams.set("plan", plan);
+  }
+
+  req.method = "POST";
+  req.url = req.path;
+  req.body = Object.fromEntries(embeddedParams.entries());
+
+  return app._router.handle(req, res, () => undefined);
+};
+
+const normalizePlanCheckResponse = (tier) => ({
+  hasActiveSubscription: tier === "premium",
+  isActiveSubscription: tier === "premium",
+  tier,
+  plan: tier === "premium" ? PREMIUM_PLAN : null,
+});
+
+const normalizePlanMutationResponse = ({ tier, confirmationUrl = null }) => ({
+  hasActiveSubscription: tier === "premium",
+  isActiveSubscription: tier === "premium",
+  tier,
+  plan: tier === "premium" ? PREMIUM_PLAN : null,
+  confirmationUrl,
+});
 
 const getSession = async (req, res) => {
   if (res?.locals?.shopify?.session) {
@@ -613,7 +863,9 @@ const BillingService = {
   },
 
   async cancel(session) {
-    return await cancelSubscription(session);
+    return await cancelSubscription(session, {
+      expectedTestMode: BILLING_IS_TEST,
+    });
   },
 };
 
@@ -790,35 +1042,41 @@ app.get("/api/scroll-to-top/hasSubscription", async (req, res) => {
       return handleError(res, HTTP_STATUS.UNAUTHORIZED, "Session not found");
     }
 
-    const tier = await SubscriptionService.getPlanTier(session);
+    const billing = await BillingService.checkSubscription(session);
+    const mismatchSubscription = !billing?.hasActivePayment
+      ? findModeMismatchSubscription(await getActiveSubscriptions(session))
+      : null;
 
-    await MetafieldService.setShopMetafield(session, tier);
+    if (mismatchSubscription) {
+      return sendBillingModeMismatch(
+        res,
+        buildModeMismatchDetails(mismatchSubscription),
+        { shop }
+      );
+    }
+
+    const tier = billing?.hasActivePayment ? "premium" : "free";
+    const metafieldSync = await syncTierMetafield(session, tier, {
+      ensureInstallation: tier === "premium",
+    });
 
     res.status(HTTP_STATUS.OK).send({
-      hasActiveSubscription: tier !== "free",
-      tier,
+      ...normalizePlanCheckResponse(tier),
+      billingMode: getBillingModeLabel(BILLING_IS_TEST),
+      metafieldSync,
     });
   } catch (err) {
-    handleError(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, err.message);
+    const error = err instanceof Error ? err : new Error(String(err));
+    handleError(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, error.message);
   }
 });
 
-/* -------------------------------------------------------------------------- */
-/*                         CREATE SUBSCRIPTION                                */
-/* -------------------------------------------------------------------------- */
-
-app.get("/api/createSubscription", async (req, res) => {
-  let session;
-
-  try {
-    session = await getSession(req, res);
-    console.log("[createSubscription] session resolved:", !!session, session?.shop);
-
-    if (!session) {
-      return sendReauthorizationRequired(req, res, session);
-    }
-
-    const requestedPlan = String(req.query.plan || "").toLowerCase();
+app.get("/api/createSubscription", bridgeBillingGetToPost("POST"));
+app.get("/api/cancelSubscription", bridgeBillingGetToPost("POST"));
+app.post(
+  "/api/createSubscription",
+  ...runBillingEndpoint(async (req, res, session) => {
+    const requestedPlan = getRequestedPlan(req);
 
     if (requestedPlan !== PREMIUM_PLAN_SLUG) {
       return handleError(
@@ -828,35 +1086,35 @@ app.get("/api/createSubscription", async (req, res) => {
       );
     }
 
-    const hostParam =
-      typeof req.query.host === "string" ? req.query.host.trim() : "";
     const billingReturnUrl = buildPricingReturnUrl(
       req,
       session.shop,
-      hostParam
+      getHostFromRequest(req)
     );
-    console.log("[createSubscription] billingReturnUrl:", billingReturnUrl);
 
-    let activeSession = session;
-    const billing = await withSessionRefresh(req, session, async (resolvedSession) => {
-      activeSession = resolvedSession;
-      return BillingService.checkSubscription(resolvedSession);
-    });
-    session = activeSession;
-    console.log("[createSubscription] hasActivePayment:", billing?.hasActivePayment);
+    const billingState = await checkBillingState(req, session);
+    session = billingState.session;
 
-    if (billing?.hasActivePayment) {
-      await MetafieldService.ensureAppMetafield(session);
-      await MetafieldService.setShopMetafield(session, "premium");
-
-      return res.send({
-        isActiveSubscription: true,
-        plan: PREMIUM_PLAN,
-        tier: "premium",
-      });
+    if (billingState.mismatchSubscription) {
+      return sendBillingModeMismatch(
+        res,
+        buildModeMismatchDetails(billingState.mismatchSubscription),
+        { shop: session.shop }
+      );
     }
 
-    console.log("[createSubscription] requesting billing...");
+    if (billingState.billing?.hasActivePayment) {
+      const metafieldSync = await syncTierMetafield(session, "premium", {
+        ensureInstallation: true,
+      });
+
+      return sendPlanResponse(
+        res,
+        normalizePlanMutationResponse({ tier: "premium" }),
+        metafieldSync
+      );
+    }
+
     const billingResponse = await withSessionRefresh(
       req,
       session,
@@ -865,87 +1123,55 @@ app.get("/api/createSubscription", async (req, res) => {
         return BillingService.requestSubscription(resolvedSession, billingReturnUrl);
       }
     );
-    console.log("[createSubscription] billingResponse type:", typeof billingResponse);
 
     const confirmationUrl =
       typeof billingResponse === "string"
         ? billingResponse
         : billingResponse?.confirmationUrl;
 
-    console.log("[createSubscription] confirmationUrl:", confirmationUrl);
-
     if (!confirmationUrl) {
       throw new Error("Shopify did not return a billing confirmation URL.");
     }
 
-    res.send({
-      isActiveSubscription: false,
-      plan: PREMIUM_PLAN,
-      tier: "free",
-      confirmationUrl,
-    });
-  } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
-    console.error("[createSubscription] error:", error.message, err);
-
-    if (err instanceof BillingError) {
-      const details = formatBillingErrorDetails(err.errorData);
-
-      console.error("Billing request failed", {
-        plan: PREMIUM_PLAN,
-        shop: session?.shop,
-        statusCode: getErrorStatusCode(err),
-        errorData: err.errorData,
-      });
-
-      if (isBillingScopeError(err)) {
-        const reauthShop = await resolveReauthShop(req, session);
-        return sendBillingReauthorizationRequired(res, reauthShop, details);
-      }
-
-      return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-        error: details[0] || err.message,
-        details,
-      });
-    }
-
-    if (isUnauthorizedError(err)) {
-      return sendReauthorizationRequired(req, res, session);
-    }
-
-    handleError(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, error.message);
-  }
-});
-
-/* -------------------------------------------------------------------------- */
-/*                         CANCEL SUBSCRIPTION                                */
-/* -------------------------------------------------------------------------- */
-
-app.get("/api/cancelSubscription", async (req, res) => {
-  let session;
-
-  try {
-    session = await getSession(req, res);
-
-    if (!session) {
-      return sendReauthorizationRequired(req, res, session);
-    }
-
-    let activeSession = session;
-    const billing = await withSessionRefresh(req, session, async (resolvedSession) => {
-      activeSession = resolvedSession;
-      return BillingService.checkSubscription(resolvedSession);
-    });
-    session = activeSession;
-
-    if (!billing?.hasActivePayment) {
-      await MetafieldService.setShopMetafield(session, "free");
-      return res.send({
-        status: "No subscription found",
-        cancelledPlan: null,
-        hasActiveSubscription: false,
+    return sendPlanResponse(
+      res,
+      normalizePlanMutationResponse({
         tier: "free",
+        confirmationUrl,
+      }),
+      { ok: true }
+    );
+  }, { requireValidatedSession: true })
+);
+
+app.post(
+  "/api/cancelSubscription",
+  ...runBillingEndpoint(async (req, res, session) => {
+    const billingState = await checkBillingState(req, session);
+    session = billingState.session;
+
+    if (billingState.mismatchSubscription) {
+      return sendBillingModeMismatch(
+        res,
+        buildModeMismatchDetails(billingState.mismatchSubscription),
+        { shop: session.shop }
+      );
+    }
+
+    if (!billingState.billing?.hasActivePayment) {
+      const metafieldSync = await syncTierMetafield(session, "free", {
+        deleteInstallation: true,
       });
+
+      return sendPlanResponse(
+        res,
+        {
+          ...normalizePlanMutationResponse({ tier: "free" }),
+          status: "No subscription found",
+          cancelledPlan: null,
+        },
+        metafieldSync
+      );
     }
 
     const status = await withSessionRefresh(req, session, async (resolvedSession) => {
@@ -953,96 +1179,49 @@ app.get("/api/cancelSubscription", async (req, res) => {
       return BillingService.cancel(resolvedSession);
     });
 
-    await MetafieldService.deleteAppMetafield(session);
-    await MetafieldService.setShopMetafield(session, "free");
-
-    res.send({
-      status,
-      cancelledPlan: PREMIUM_PLAN,
-      hasActiveSubscription: false,
-      tier: "free",
+    const metafieldSync = await syncTierMetafield(session, "free", {
+      deleteInstallation: true,
     });
-  } catch (err) {
-    if (err instanceof BillingError) {
-      const details = formatBillingErrorDetails(err.errorData);
 
-      if (isBillingScopeError(err)) {
-        const reauthShop = await resolveReauthShop(req, session);
-        return sendBillingReauthorizationRequired(res, reauthShop, details);
-      }
+    return sendPlanResponse(
+      res,
+      {
+        ...normalizePlanMutationResponse({ tier: "free" }),
+        status,
+        cancelledPlan: PREMIUM_PLAN,
+      },
+      metafieldSync
+    );
+  }, { requireValidatedSession: true })
+);
 
-      return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-        error: details[0] || err.message,
-        details,
-      });
+app.get(
+  "/api/hasActiveSubscription",
+  ...runBillingEndpoint(async (req, res, session) => {
+    const billingState = await checkBillingState(req, session);
+    session = billingState.session;
+
+    if (billingState.mismatchSubscription) {
+      return sendBillingModeMismatch(
+        res,
+        buildModeMismatchDetails(billingState.mismatchSubscription),
+        { shop: session.shop }
+      );
     }
 
-    if (isUnauthorizedError(err)) {
-      return sendReauthorizationRequired(req, res, session);
-    }
-    handleError(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, err.message);
-  }
-});
-
-/* -------------------------------------------------------------------------- */
-/*                        CHECK ACTIVE SUBSCRIPTION                           */
-/* -------------------------------------------------------------------------- */
-
-app.get("/api/hasActiveSubscription", async (req, res) => {
-  let session;
-
-  try {
-    session = await getSession(req, res);
-
-    if (!session) {
-      return sendReauthorizationRequired(req, res, session, {
-        error: "Authentication context is missing. Reopen the app from Shopify admin and try again.",
-      });
-    }
-
-    let activeSession = session;
-    const tier = await withSessionRefresh(req, session, async (resolvedSession) => {
-      activeSession = resolvedSession;
-      return SubscriptionService.getPlanTier(resolvedSession);
+    const tier = billingState.billing?.hasActivePayment ? "premium" : "free";
+    const metafieldSync = await syncTierMetafield(session, tier, {
+      ensureInstallation: tier === "premium",
+      deleteInstallation: tier === "free",
     });
-    session = activeSession;
 
-    if (tier === "free") {
-      await MetafieldService.setShopMetafield(session, "free");
-      return res.send({ hasActiveSubscription: false, tier: "free" });
-    }
-
-    await MetafieldService.ensureAppMetafield(session);
-    await MetafieldService.setShopMetafield(session, "premium");
-
-    res.send({ hasActiveSubscription: true, tier });
-  } catch (err) {
-    if (err instanceof BillingError) {
-      const details = formatBillingErrorDetails(err.errorData);
-
-      console.error("Active subscription check failed", {
-        shop: session?.shop,
-        statusCode: getErrorStatusCode(err),
-        errorData: err.errorData,
-      });
-
-      if (isBillingScopeError(err)) {
-        const reauthShop = await resolveReauthShop(req, session);
-        return sendBillingReauthorizationRequired(res, reauthShop, details);
-      }
-
-      return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-        error: details[0] || err.message,
-        details,
-      });
-    }
-
-    if (isUnauthorizedError(err)) {
-      return sendReauthorizationRequired(req, res, session);
-    }
-    handleError(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, err.message);
-  }
-});
+    return sendPlanResponse(
+      res,
+      normalizePlanCheckResponse(tier),
+      metafieldSync
+    );
+  }, { requireValidatedSession: true })
+);
 
 /* -------------------------------------------------------------------------- */
 /*                                SHOP INFO                                   */
