@@ -132,21 +132,13 @@ app.get(shopify.config.auth.callbackPath, async (req, res) => {
     };
 
     if (!callbackResponse.session.isOnline) {
-      const registrationResult = await shopify.api.webhooks.register({
-        session: callbackResponse.session,
-      });
-      const failedTopics = getFailedWebhookTopics(registrationResult);
+      const existingOfflineSession = await loadSessionForShop(
+        callbackResponse.session.shop
+      );
 
-      if (failedTopics.length) {
-        console.error("[auth/callback] Mandatory webhook registration failed:", {
-          shop: callbackResponse.session.shop,
-          failedTopics,
-          registrationResult,
-        });
-        return res
-          .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-          .send("Mandatory Shopify compliance webhook registration failed.");
-      }
+      await registerRequiredWebhooksAfterAuth(callbackResponse.session, {
+        allowFailure: !!existingOfflineSession?.accessToken,
+      });
     }
 
     const host = shopify.api.utils.sanitizeHost(req.query.host);
@@ -248,6 +240,54 @@ const getFailedWebhookTopics = (registrationResult) =>
     const results = registrationResult?.[topic];
     return !Array.isArray(results) || results.some((result) => !result?.success);
   });
+
+const registerRequiredWebhooksAfterAuth = async (
+  session,
+  { allowFailure = false } = {}
+) => {
+  try {
+    const registrationResult = await shopify.api.webhooks.register({ session });
+    const failedTopics = getFailedWebhookTopics(registrationResult);
+
+    if (!failedTopics.length) {
+      return;
+    }
+
+    const details = {
+      shop: session.shop,
+      failedTopics,
+      registrationResult,
+    };
+
+    if (allowFailure) {
+      console.warn(
+        "[auth/callback] Webhook registration failed during reauthorization; continuing with existing installation state.",
+        details
+      );
+      return;
+    }
+
+    console.error("[auth/callback] Mandatory webhook registration failed:", details);
+  } catch (error) {
+    if (allowFailure) {
+      console.warn(
+        "[auth/callback] Webhook registration threw during reauthorization; continuing with existing installation state.",
+        {
+          shop: session.shop,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+      return;
+    }
+
+    console.error("[auth/callback] Mandatory webhook registration threw:", {
+      shop: session.shop,
+      error,
+    });
+  }
+
+  throw new Error("Mandatory Shopify compliance webhook registration failed.");
+};
 
 const getShopFromHostParam = (hostParam) => {
   const decodedHost = decodeBase64Url(hostParam);
