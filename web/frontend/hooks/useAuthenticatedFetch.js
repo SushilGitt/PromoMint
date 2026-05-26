@@ -2,6 +2,8 @@ import { authenticatedFetch } from "@shopify/app-bridge-utils";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { Redirect } from "@shopify/app-bridge/actions";
 
+const RETURN_TO_STORAGE_KEY = "promomint:returnTo";
+
 /**
  * A hook that returns an auth-aware fetch function.
  * @desc The returned fetch function that matches the browser's fetch API
@@ -31,12 +33,19 @@ function checkHeadersForReauthorization(headers, app) {
       headers.get("X-Shopify-API-Request-Failure-Reauthorize-Url") ||
       `/api/auth`;
 
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    window.sessionStorage.setItem(RETURN_TO_STORAGE_KEY, returnTo);
+
+    let authUrl = authUrlHeader;
+    if (authUrlHeader.startsWith("/")) {
+      const resolvedAuthUrl = new URL(authUrlHeader, `https://${window.location.host}`);
+      if (!resolvedAuthUrl.searchParams.has("returnTo")) {
+        resolvedAuthUrl.searchParams.set("returnTo", returnTo);
+      }
+      authUrl = resolvedAuthUrl.toString();
+    }
+
     const redirect = Redirect.create(app);
-    redirect.dispatch(
-      Redirect.Action.REMOTE,
-      authUrlHeader.startsWith("/")
-        ? `https://${window.location.host}${authUrlHeader}`
-        : authUrlHeader
-    );
+    redirect.dispatch(Redirect.Action.REMOTE, authUrl);
   }
 }

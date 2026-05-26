@@ -331,6 +331,41 @@ const getShopFromRequest = async (req) => {
   return getShopFromHostParam(hostParam);
 };
 
+const resolveReauthShop = async (req, session) =>
+  session?.shop || (await getShopFromRequest(req)) || "";
+
+const sendReauthorizationRequired = async (req, res, session, extra = {}) => {
+  const shop = await resolveReauthShop(req, session);
+  return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+    needsReauth: true,
+    shop,
+    ...extra,
+  });
+};
+
+const buildPricingReturnUrl = (req, shop, hostParam) => {
+  const appBase = getAppBaseUrl(req).replace(/\/+$/, "");
+  const sanitizedHost = shopify.api.utils.sanitizeHost(hostParam || "");
+
+  if (!appBase) {
+    throw new Error("Missing HOST configuration for Shopify billing return URL.");
+  }
+
+  if (!shop) {
+    throw new Error("Missing shop for Shopify billing return URL.");
+  }
+
+  if (!sanitizedHost) {
+    throw new Error("Missing host parameter for Shopify billing return URL.");
+  }
+
+  const returnParams = new URLSearchParams();
+  returnParams.set("shop", shop);
+  returnParams.set("host", sanitizedHost);
+
+  return `${appBase}/pricing?${returnParams.toString()}`;
+};
+
 const getSession = async (req, res) => {
   if (res?.locals?.shopify?.session) {
     return res.locals.shopify.session;
@@ -693,7 +728,7 @@ app.get("/api/createSubscription", async (req, res) => {
     console.log("[createSubscription] session resolved:", !!session, session?.shop);
 
     if (!session) {
-      return res.status(HTTP_STATUS.UNAUTHORIZED).json({ needsReauth: true, shop: session?.shop });
+      return sendReauthorizationRequired(req, res, session);
     }
 
     const requestedPlan = String(req.query.plan || "").toLowerCase();
@@ -706,13 +741,13 @@ app.get("/api/createSubscription", async (req, res) => {
       );
     }
 
-    const appBase = (APP_HOST || getAppBaseUrl(req)).replace(/\/+$/, "");
     const hostParam =
       typeof req.query.host === "string" ? req.query.host.trim() : "";
-    const returnParams = new URLSearchParams();
-    returnParams.set("shop", session.shop);
-    if (hostParam) returnParams.set("host", hostParam);
-    const billingReturnUrl = `${appBase}/pricing?${returnParams.toString()}`;
+    const billingReturnUrl = buildPricingReturnUrl(
+      req,
+      session.shop,
+      hostParam
+    );
     console.log("[createSubscription] billingReturnUrl:", billingReturnUrl);
 
     let activeSession = session;
@@ -777,7 +812,8 @@ app.get("/api/createSubscription", async (req, res) => {
       });
 
       if (isBillingScopeError(err)) {
-        return sendBillingReauthorizationRequired(res, session?.shop, details);
+        const reauthShop = await resolveReauthShop(req, session);
+        return sendBillingReauthorizationRequired(res, reauthShop, details);
       }
 
       return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
@@ -787,9 +823,7 @@ app.get("/api/createSubscription", async (req, res) => {
     }
 
     if (isUnauthorizedError(err)) {
-      return res
-        .status(HTTP_STATUS.UNAUTHORIZED)
-        .json({ needsReauth: true, shop: session?.shop });
+      return sendReauthorizationRequired(req, res, session);
     }
 
     handleError(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, error.message);
@@ -807,7 +841,7 @@ app.get("/api/cancelSubscription", async (req, res) => {
     session = await getSession(req, res);
 
     if (!session) {
-      return res.status(HTTP_STATUS.UNAUTHORIZED).json({ needsReauth: true });
+      return sendReauthorizationRequired(req, res, session);
     }
 
     let activeSession = session;
@@ -834,8 +868,22 @@ app.get("/api/cancelSubscription", async (req, res) => {
       cancelledPlan: PREMIUM_PLAN,
     });
   } catch (err) {
+    if (err instanceof BillingError) {
+      const details = formatBillingErrorDetails(err.errorData);
+
+      if (isBillingScopeError(err)) {
+        const reauthShop = await resolveReauthShop(req, session);
+        return sendBillingReauthorizationRequired(res, reauthShop, details);
+      }
+
+      return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+        error: details[0] || err.message,
+        details,
+      });
+    }
+
     if (isUnauthorizedError(err)) {
-      return res.status(HTTP_STATUS.UNAUTHORIZED).json({ needsReauth: true, shop: session?.shop });
+      return sendReauthorizationRequired(req, res, session);
     }
     handleError(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, err.message);
   }
@@ -852,14 +900,9 @@ app.get("/api/hasActiveSubscription", async (req, res) => {
     session = await getSession(req, res);
 
     if (!session) {
-      const shop = await getShopFromRequest(req);
-      if (shop) {
-        return res
-          .status(HTTP_STATUS.UNAUTHORIZED)
-          .json({ needsReauth: true, shop });
-      }
-
-      return res.send({ hasActiveSubscription: false, tier: "free" });
+      return sendReauthorizationRequired(req, res, session, {
+        error: "Authentication context is missing. Reopen the app from Shopify admin and try again.",
+      });
     }
 
     let activeSession = session;
@@ -889,7 +932,8 @@ app.get("/api/hasActiveSubscription", async (req, res) => {
       });
 
       if (isBillingScopeError(err)) {
-        return sendBillingReauthorizationRequired(res, session?.shop, details);
+        const reauthShop = await resolveReauthShop(req, session);
+        return sendBillingReauthorizationRequired(res, reauthShop, details);
       }
 
       return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
@@ -899,7 +943,7 @@ app.get("/api/hasActiveSubscription", async (req, res) => {
     }
 
     if (isUnauthorizedError(err)) {
-      return res.status(HTTP_STATUS.UNAUTHORIZED).json({ needsReauth: true, shop: session?.shop });
+      return sendReauthorizationRequired(req, res, session);
     }
     handleError(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, err.message);
   }

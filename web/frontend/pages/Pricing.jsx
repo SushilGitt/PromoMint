@@ -1,5 +1,5 @@
 // @ts-check
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Page,
   Layout,
@@ -54,10 +54,11 @@ export default function Pricing() {
     []
   );
 
-  const [serverTier, setServerTier] = useState("free");
+  const [serverTier, setServerTier] = useState(null);
   const [loading, setLoading] = useState({ page: true, action: null });
   const [confirm, setConfirm] = useState({ open: false, target: null });
   const [banner, setBanner] = useState({ msg: "", status: null });
+  const reauthInFlight = useRef(false);
 
   const PRICE = "19";
 
@@ -98,10 +99,22 @@ export default function Pricing() {
    * Returns true if a redirect was triggered (caller should bail out).
    */
   const handleReauth = (data, pendingPlan = "") => {
-    if (!data?.needsReauth) return false;
+    if (!data?.needsReauth) {
+      return { redirected: false, blocked: false };
+    }
+
+    if (reauthInFlight.current) {
+      return { redirected: true, blocked: false };
+    }
 
     const reauthShop = shop || data.shop || "";
-    if (!reauthShop) return false;
+    if (!reauthShop) {
+      setBanner({
+        msg: "Authentication expired and store context is missing. Reopen the app from Shopify admin and try again.",
+        status: "critical",
+      });
+      return { redirected: false, blocked: true };
+    }
 
     const returnTo = `${window.location.pathname}${window.location.search}`;
     window.sessionStorage.setItem(RETURN_TO_STORAGE_KEY, returnTo);
@@ -112,9 +125,16 @@ export default function Pricing() {
       window.sessionStorage.removeItem(PENDING_PLAN_STORAGE_KEY);
     }
 
-    const authUrl = `https://${window.location.host}/api/auth?shop=${encodeURIComponent(reauthShop)}&returnTo=${encodeURIComponent(returnTo)}`;
-    redirect.dispatch(Redirect.Action.REMOTE, authUrl);
-    return true;
+    const authUrl = new URL(`/api/auth`, `https://${window.location.host}`);
+    authUrl.searchParams.set("shop", reauthShop);
+    authUrl.searchParams.set("returnTo", returnTo);
+    if (host) {
+      authUrl.searchParams.set("host", host);
+    }
+
+    reauthInFlight.current = true;
+    redirect.dispatch(Redirect.Action.REMOTE, authUrl.toString());
+    return { redirected: true, blocked: false };
   };
 
   const clearPendingPlan = () => {
@@ -142,7 +162,9 @@ export default function Pricing() {
       );
 
       const data = await parseJsonSafe(response);
-      if (handleReauth(data, "free")) return { redirected: true };
+      const reauthResult = handleReauth(data, "free");
+      if (reauthResult.redirected) return { redirected: true };
+      if (reauthResult.blocked) throw new Error(getErrorMessage(data, "Authentication context is missing."));
 
       if (!response.ok) {
         throw new Error(
@@ -161,7 +183,9 @@ export default function Pricing() {
     );
 
     const data = await parseJsonSafe(res);
-    if (handleReauth(data, "premium")) return { redirected: true };
+    const reauthResult = handleReauth(data, "premium");
+    if (reauthResult.redirected) return { redirected: true };
+    if (reauthResult.blocked) throw new Error(getErrorMessage(data, "Authentication context is missing."));
 
     if (!res.ok) {
       throw new Error(
@@ -208,11 +232,29 @@ export default function Pricing() {
       ]);
 
       const data = await parseJsonSafe(res);
-      if (handleReauth(data)) return;
+      const reauthResult = handleReauth(data);
+      if (reauthResult.redirected || reauthResult.blocked) return;
 
-      setServerTier(data?.tier === "premium" ? "premium" : "free");
-    } catch {
-      setServerTier("free");
+      if (!res.ok || (data?.tier !== "premium" && data?.tier !== "free")) {
+        throw new Error(getErrorMessage(data, "We couldn’t confirm your current plan."));
+      }
+
+      setServerTier(data.tier);
+      setBanner((currentBanner) =>
+        currentBanner.status === "critical" &&
+        currentBanner.msg === "We couldn’t confirm your current plan."
+          ? { msg: "", status: null }
+          : currentBanner
+      );
+    } catch (error) {
+      setServerTier(null);
+      setBanner({
+        msg:
+          error instanceof Error
+            ? error.message
+            : "We couldn’t confirm your current plan.",
+        status: "critical",
+      });
     } finally {
       setLoading((s) => ({ ...s, page: false }));
     }
@@ -225,12 +267,14 @@ export default function Pricing() {
   /* ---------- Change plan ---------- */
 
   const openConfirm = (plan) => {
-    if (plan === selectedPlan) return;
+    if (loading.page || loading.action || plan === selectedPlan) return;
     setConfirm({ open: true, target: plan });
   };
 
   const runConfirm = async () => {
     const plan = confirm.target;
+    if (!plan || loading.page || loading.action) return;
+
     setConfirm({ open: false, target: null });
     setLoading((s) => ({ ...s, action: plan }));
 
@@ -355,7 +399,7 @@ export default function Pricing() {
             <Button
               fullWidth
               style={freeButtonStyle}
-              disabled={isCurrent("free") || loading.page}
+              disabled={isCurrent("free") || loading.page || !!loading.action || !selectedPlan}
               loading={loading.action === "free"}
               onClick={() => openConfirm("free")}
             >
@@ -394,7 +438,7 @@ export default function Pricing() {
             <Button
               fullWidth
               style={premiumButtonStyle}
-              disabled={isCurrent("premium") || loading.page}
+              disabled={isCurrent("premium") || loading.page || !!loading.action || !selectedPlan}
               loading={loading.action === "premium"}
               onClick={() => openConfirm("premium")}
             >
@@ -426,6 +470,7 @@ export default function Pricing() {
               : `Approve $${PRICE}/month`,
           onAction: runConfirm,
           loading: loading.action === confirm.target,
+          disabled: !confirm.target || loading.page || !!loading.action,
         }}
       >
         <Modal.Section>
