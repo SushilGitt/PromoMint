@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { BrowserRouter, useLocation, useNavigate } from "react-router-dom";
 import { NavigationMenu } from "@shopify/app-bridge-react";
 import Routes from "./Routes";
@@ -14,8 +14,15 @@ const RETURN_TO_STORAGE_KEY = "promomint:returnTo";
 function ResumeStoredRoute() {
   const location = useLocation();
   const navigate = useNavigate();
+  const hasCheckedStoredRoute = useRef(false);
 
   useEffect(() => {
+    if (hasCheckedStoredRoute.current) {
+      return;
+    }
+
+    hasCheckedStoredRoute.current = true;
+
     const storedRoute = window.sessionStorage.getItem(RETURN_TO_STORAGE_KEY);
     if (!storedRoute) return;
 
