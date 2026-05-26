@@ -19,6 +19,8 @@ import { useAuthenticatedFetch } from "../hooks";
 
 const RETURN_TO_STORAGE_KEY = "promomint:returnTo";
 const PENDING_PLAN_STORAGE_KEY = "promomint:pendingPlan";
+const REAUTH_GUARD_STORAGE_KEY = "promomint:pricingReauthGuard";
+const REAUTH_GUARD_WINDOW_MS = 15000;
 
 export default function Pricing() {
   const app = useAppBridge();
@@ -100,11 +102,24 @@ export default function Pricing() {
    */
   const handleReauth = (data, pendingPlan = "") => {
     if (!data?.needsReauth) {
+      clearRecentReauthAttempt();
       return { redirected: false, blocked: false };
     }
 
-    if (reauthInFlight.current) {
-      return { redirected: true, blocked: false };
+    const reauthReason = data.requiresBillingScopes ? "billing-scopes" : "session";
+    const recentReason = getRecentReauthReason();
+
+    if (reauthInFlight.current || recentReason === reauthReason) {
+      const repeatedMessage =
+        reauthReason === "billing-scopes"
+          ? "Pricing cannot load until Shopify finishes app reauthorization for billing scopes. Reopen the app from Shopify admin and approve the updated access request."
+          : "Pricing could not restore your Shopify session. Reopen the app from Shopify admin and try again.";
+
+      setBanner({
+        msg: repeatedMessage,
+        status: "critical",
+      });
+      return { redirected: false, blocked: true };
     }
 
     const reauthShop = shop || data.shop || "";
@@ -125,6 +140,8 @@ export default function Pricing() {
       window.sessionStorage.removeItem(PENDING_PLAN_STORAGE_KEY);
     }
 
+    rememberReauthAttempt(reauthReason);
+
     const authUrl = new URL(`/api/auth`, `https://${window.location.host}`);
     authUrl.searchParams.set("shop", reauthShop);
     authUrl.searchParams.set("returnTo", returnTo);
@@ -139,6 +156,40 @@ export default function Pricing() {
 
   const clearPendingPlan = () => {
     window.sessionStorage.removeItem(PENDING_PLAN_STORAGE_KEY);
+  };
+
+  const getRecentReauthReason = () => {
+    const rawValue = window.sessionStorage.getItem(REAUTH_GUARD_STORAGE_KEY);
+    if (!rawValue) return "";
+
+    try {
+      const parsed = JSON.parse(rawValue);
+      if (!parsed?.startedAt || !parsed?.reason) {
+        window.sessionStorage.removeItem(REAUTH_GUARD_STORAGE_KEY);
+        return "";
+      }
+
+      if (Date.now() - parsed.startedAt > REAUTH_GUARD_WINDOW_MS) {
+        window.sessionStorage.removeItem(REAUTH_GUARD_STORAGE_KEY);
+        return "";
+      }
+
+      return parsed.reason;
+    } catch {
+      window.sessionStorage.removeItem(REAUTH_GUARD_STORAGE_KEY);
+      return "";
+    }
+  };
+
+  const rememberReauthAttempt = (reason) => {
+    window.sessionStorage.setItem(
+      REAUTH_GUARD_STORAGE_KEY,
+      JSON.stringify({ reason, startedAt: Date.now() })
+    );
+  };
+
+  const clearRecentReauthAttempt = () => {
+    window.sessionStorage.removeItem(REAUTH_GUARD_STORAGE_KEY);
   };
 
   const consumePendingPlanNotice = () => {
@@ -212,6 +263,7 @@ export default function Pricing() {
 
   useEffect(() => {
     consumePendingPlanNotice();
+    reauthInFlight.current = false;
   }, []);
 
   /* ---------- Load current plan ---------- */
