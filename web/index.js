@@ -439,8 +439,55 @@ app.use((req, res, next) => {
   return res.redirect(302, redirectUrl.toString());
 });
 
-const getErrorStatusCode = (err) =>
-  err?.response?.code || err?.code || err?.statusCode || null;
+const getErrorStatusCode = (err) => {
+  const directStatusCode =
+    err?.response?.code ||
+    err?.response?.statusCode ||
+    err?.response?.networkStatusCode ||
+    err?.response?.response?.networkStatusCode ||
+    err?.code ||
+    err?.statusCode;
+
+  if (typeof directStatusCode === "number") {
+    return directStatusCode;
+  }
+
+  if (typeof directStatusCode === "string" && /^\d+$/.test(directStatusCode)) {
+    return Number(directStatusCode);
+  }
+
+  if (Array.isArray(err?.errorData)) {
+    for (const detail of err.errorData) {
+      const nestedStatusCode =
+        detail?.code ||
+        detail?.statusCode ||
+        detail?.networkStatusCode ||
+        detail?.extensions?.code ||
+        detail?.extensions?.statusCode ||
+        detail?.extensions?.networkStatusCode ||
+        detail?.response?.code ||
+        detail?.response?.statusCode ||
+        detail?.response?.networkStatusCode;
+
+      if (typeof nestedStatusCode === "number") {
+        return nestedStatusCode;
+      }
+
+      if (typeof nestedStatusCode === "string" && /^\d+$/.test(nestedStatusCode)) {
+        return Number(nestedStatusCode);
+      }
+    }
+  }
+
+  if (typeof err?.message === "string") {
+    const matchedStatusCode = err.message.match(/\b(401|403)\b/);
+    if (matchedStatusCode) {
+      return Number(matchedStatusCode[1]);
+    }
+  }
+
+  return null;
+};
 
 const isUnauthorizedError = (err) => {
   const statusCode = getErrorStatusCode(err);
