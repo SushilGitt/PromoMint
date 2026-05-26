@@ -1,5 +1,5 @@
 // @ts-check
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Page,
   Layout,
@@ -17,23 +17,19 @@ import { Redirect } from "@shopify/app-bridge/actions";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { useAuthenticatedFetch } from "../hooks";
 
-const RETURN_TO_STORAGE_KEY = "promomint:returnTo";
 const PENDING_PLAN_STORAGE_KEY = "promomint:pendingPlan";
-const REAUTH_GUARD_STORAGE_KEY = "promomint:pricingReauthGuard";
-const REAUTH_GUARD_WINDOW_MS = 15000;
+const REQUEST_TIMEOUT_MS = 8000;
 
 export default function Pricing() {
   const app = useAppBridge();
   const fetchAuth = useAuthenticatedFetch();
   const redirect = Redirect.create(app);
-  const REQUEST_TIMEOUT_MS = 8000;
+
   const shop = (() => {
     const qs = new URLSearchParams(window.location.search);
     const fromUrl = qs.get("shop");
     if (fromUrl) return fromUrl;
 
-    // After App Bridge navigation the ?shop= param is often stripped.
-    // Decode the shop name from the host parameter that App Bridge caches.
     try {
       const host = qs.get("host") || window.__SHOPIFY_DEV_HOST;
       if (host) {
@@ -41,7 +37,9 @@ export default function Pricing() {
         const match = decoded.match(/\/store\/([^/]+)/);
         if (match) return `${match[1]}.myshopify.com`;
       }
-    } catch { /* ignore decode errors */ }
+    } catch {
+      return "";
+    }
 
     return "";
   })();
@@ -56,17 +54,19 @@ export default function Pricing() {
     []
   );
 
-  const [serverTier, setServerTier] = useState(null);
+  const [serverTier, setServerTier] = useState(/** @type {"free" | "premium" | null} */ (null));
   const [loading, setLoading] = useState({ page: true, action: null });
   const [confirm, setConfirm] = useState({ open: false, target: null });
   const [banner, setBanner] = useState({ msg: "", status: null });
-  const reauthInFlight = useRef(false);
 
   const PRICE = "19";
 
   const selectedPlan = useMemo(() => {
-    if (!serverTier) return null;
-    return serverTier === "premium" ? "premium" : "free";
+    if (serverTier !== "free" && serverTier !== "premium") {
+      return null;
+    }
+
+    return serverTier;
   }, [serverTier]);
 
   const withShopQuery = (path) => {
@@ -95,101 +95,8 @@ export default function Pricing() {
     }
   };
 
-  /**
-   * If the backend says the session is expired, redirect the merchant
-   * through Shopify OAuth to get a fresh offline access token.
-   * Returns true if a redirect was triggered (caller should bail out).
-   */
-  const handleReauth = (data, pendingPlan = "") => {
-    if (!data?.needsReauth) {
-      clearRecentReauthAttempt();
-      return { redirected: false, blocked: false };
-    }
-
-    const reauthReason = data.requiresBillingScopes ? "billing-scopes" : "session";
-    const recentReason = getRecentReauthReason();
-
-    if (reauthInFlight.current || recentReason === reauthReason) {
-      const repeatedMessage =
-        reauthReason === "billing-scopes"
-          ? "Pricing cannot load until Shopify finishes app reauthorization for billing scopes. Reopen the app from Shopify admin and approve the updated access request."
-          : "Pricing could not restore your Shopify session. Reopen the app from Shopify admin and try again.";
-
-      setBanner({
-        msg: repeatedMessage,
-        status: "critical",
-      });
-      return { redirected: false, blocked: true };
-    }
-
-    const reauthShop = shop || data.shop || "";
-    if (!reauthShop) {
-      setBanner({
-        msg: "Authentication expired and store context is missing. Reopen the app from Shopify admin and try again.",
-        status: "critical",
-      });
-      return { redirected: false, blocked: true };
-    }
-
-    const returnTo = `${window.location.pathname}${window.location.search}`;
-    window.sessionStorage.setItem(RETURN_TO_STORAGE_KEY, returnTo);
-
-    if (pendingPlan) {
-      window.sessionStorage.setItem(PENDING_PLAN_STORAGE_KEY, pendingPlan);
-    } else {
-      window.sessionStorage.removeItem(PENDING_PLAN_STORAGE_KEY);
-    }
-
-    rememberReauthAttempt(reauthReason);
-
-    const authUrl = new URL(`/api/auth`, `https://${window.location.host}`);
-    authUrl.searchParams.set("shop", reauthShop);
-    authUrl.searchParams.set("returnTo", returnTo);
-    if (host) {
-      authUrl.searchParams.set("host", host);
-    }
-
-    reauthInFlight.current = true;
-    redirect.dispatch(Redirect.Action.REMOTE, authUrl.toString());
-    return { redirected: true, blocked: false };
-  };
-
   const clearPendingPlan = () => {
     window.sessionStorage.removeItem(PENDING_PLAN_STORAGE_KEY);
-  };
-
-  const getRecentReauthReason = () => {
-    const rawValue = window.sessionStorage.getItem(REAUTH_GUARD_STORAGE_KEY);
-    if (!rawValue) return "";
-
-    try {
-      const parsed = JSON.parse(rawValue);
-      if (!parsed?.startedAt || !parsed?.reason) {
-        window.sessionStorage.removeItem(REAUTH_GUARD_STORAGE_KEY);
-        return "";
-      }
-
-      if (Date.now() - parsed.startedAt > REAUTH_GUARD_WINDOW_MS) {
-        window.sessionStorage.removeItem(REAUTH_GUARD_STORAGE_KEY);
-        return "";
-      }
-
-      return parsed.reason;
-    } catch {
-      window.sessionStorage.removeItem(REAUTH_GUARD_STORAGE_KEY);
-      return "";
-    }
-  };
-
-  const rememberReauthAttempt = (reason) => {
-    window.sessionStorage.setItem(
-      REAUTH_GUARD_STORAGE_KEY,
-      JSON.stringify({ reason, startedAt: Date.now() })
-    );
-  };
-
-  const clearRecentReauthAttempt = () => {
-    window.sessionStorage.removeItem(REAUTH_GUARD_STORAGE_KEY);
   };
 
   const consumePendingPlanNotice = () => {
@@ -200,77 +107,89 @@ export default function Pricing() {
     setBanner({
       msg:
         pendingPlan === "premium"
-          ? "Authentication restored. Choose Premium again to continue to Shopify billing approval."
-          : "Authentication restored. Choose Free again to finish switching plans.",
+          ? "Authentication restored. Continue with Premium to open Shopify billing approval."
+          : "Authentication restored. Continue with Free to finish switching plans.",
       status: "info",
     });
   };
 
-  const performPlanAction = async (plan) => {
-    if (plan === "free") {
-      const response = await fetchAuth(
-        withShopQuery("/api/cancelSubscription")
-      );
-
-      const data = await parseJsonSafe(response);
-      const reauthResult = handleReauth(data, "free");
-      if (reauthResult.redirected) return { redirected: true };
-      if (reauthResult.blocked) throw new Error(getErrorMessage(data, "Authentication context is missing."));
-
-      if (!response.ok) {
+  const handleAuthResponse = (response, data, fallback) => {
+    if (response.status === 401 && data?.needsReauth) {
+      if (data.requiresBillingScopes) {
         throw new Error(
-          getErrorMessage(data, "We couldn’t switch you to the Free plan.")
+          "Shopify needs fresh app authorization for billing scopes. Reopen the app from Shopify admin, approve access, and try Premium again."
         );
       }
 
+      throw new Error(
+        getErrorMessage(
+          data,
+          "Authentication is being restored. If the page does not recover, reopen the app from Shopify admin and try again."
+        )
+      );
+    }
+
+    if (!response.ok) {
+      throw new Error(getErrorMessage(data, fallback));
+    }
+  };
+
+  const loadPlanResponse = async () => {
+    const response = await fetchAuth(withShopQuery("/api/hasActiveSubscription"));
+    const data = await parseJsonSafe(response);
+    return { response, data };
+  };
+
+  const performPlanAction = async (plan) => {
+    if (plan === "free") {
+      const response = await fetchAuth(withShopQuery("/api/cancelSubscription"), {
+        reauthPlan: "free",
+      });
+      const data = await parseJsonSafe(response);
+
+      handleAuthResponse(response, data, "We couldn’t switch you to the Free plan.");
+
+      if (data?.tier !== "free") {
+        throw new Error("The Free plan could not be confirmed after cancellation.");
+      }
+
       clearPendingPlan();
-      await refreshTier();
+      setServerTier("free");
       setBanner({ msg: "Your store is now on the Free plan.", status: "success" });
       return { redirected: false };
     }
 
-    const res = await fetchAuth(
-      withShopQuery("/api/createSubscription?plan=premium")
+    const response = await fetchAuth(withShopQuery("/api/createSubscription?plan=premium"), {
+      reauthPlan: "premium",
+    });
+    const data = await parseJsonSafe(response);
+
+    handleAuthResponse(
+      response,
+      data,
+      "We couldn’t start the Premium subscription."
     );
-
-    const data = await parseJsonSafe(res);
-    const reauthResult = handleReauth(data, "premium");
-    if (reauthResult.redirected) return { redirected: true };
-    if (reauthResult.blocked) throw new Error(getErrorMessage(data, "Authentication context is missing."));
-
-    if (!res.ok) {
-      throw new Error(
-        getErrorMessage(data, "We couldn’t start the Premium subscription.")
-      );
-    }
 
     if (data.isActiveSubscription) {
       clearPendingPlan();
-      await refreshTier();
+      setServerTier("premium");
       setBanner({ msg: "Your Premium plan is already active.", status: "success" });
       return { redirected: false };
     }
 
     if (data.confirmationUrl) {
       clearPendingPlan();
-      const confirmationUrl = String(data.confirmationUrl);
-      redirect.dispatch(Redirect.Action.REMOTE, confirmationUrl);
+      redirect.dispatch(Redirect.Action.REMOTE, String(data.confirmationUrl));
       return { redirected: true };
     }
 
     throw new Error("Shopify did not return a billing approval link.");
   };
 
-  useEffect(() => {
-    consumePendingPlanNotice();
-    reauthInFlight.current = false;
-  }, []);
-
-  /* ---------- Load current plan ---------- */
-
   async function refreshTier() {
     try {
       setLoading((s) => ({ ...s, page: true }));
+
       const timeout = new Promise((_, reject) => {
         setTimeout(
           () => reject(new Error("Loading plans took too long.")),
@@ -278,23 +197,21 @@ export default function Pricing() {
         );
       });
 
-      const res = await Promise.race([
-        fetchAuth(withShopQuery("/api/hasActiveSubscription")),
-        timeout,
-      ]);
+      const { response, data } = await Promise.race([loadPlanResponse(), timeout]);
 
-      const data = await parseJsonSafe(res);
-      const reauthResult = handleReauth(data);
-      if (reauthResult.redirected || reauthResult.blocked) return;
+      handleAuthResponse(
+        response,
+        data,
+        "We couldn’t confirm your current plan."
+      );
 
-      if (!res.ok || (data?.tier !== "premium" && data?.tier !== "free")) {
-        throw new Error(getErrorMessage(data, "We couldn’t confirm your current plan."));
+      if (data?.tier !== "premium" && data?.tier !== "free") {
+        throw new Error("We couldn’t confirm your current plan.");
       }
 
       setServerTier(data.tier);
       setBanner((currentBanner) =>
-        currentBanner.status === "critical" &&
-        currentBanner.msg === "We couldn’t confirm your current plan."
+        currentBanner.status === "critical"
           ? { msg: "", status: null }
           : currentBanner
       );
@@ -313,13 +230,15 @@ export default function Pricing() {
   }
 
   useEffect(() => {
+    consumePendingPlanNotice();
     refreshTier();
   }, []);
 
-  /* ---------- Change plan ---------- */
-
   const openConfirm = (plan) => {
-    if (loading.page || loading.action || plan === selectedPlan) return;
+    if (loading.page || loading.action || plan === selectedPlan || !selectedPlan) {
+      return;
+    }
+
     setConfirm({ open: true, target: plan });
   };
 
@@ -331,14 +250,17 @@ export default function Pricing() {
     setLoading((s) => ({ ...s, action: plan }));
 
     try {
-      await performPlanAction(plan);
+      const result = await performPlanAction(plan);
+      if (!result.redirected) {
+        await refreshTier();
+      }
     } catch (error) {
       clearPendingPlan();
       setBanner({
         msg:
           error instanceof Error
             ? error.message
-            : "We couldn’t start the Premium subscription.",
+            : "We couldn’t update your plan.",
         status: "critical",
       });
     } finally {
@@ -347,8 +269,7 @@ export default function Pricing() {
   };
 
   const isCurrent = (plan) => selectedPlan === plan;
-
-  /* ---------- UI helpers ---------- */
+  const hasResolvedPlan = selectedPlan === "free" || selectedPlan === "premium";
 
   const Feature = ({ children }) => (
     <Stack spacing="tight" alignment="center">
@@ -356,8 +277,6 @@ export default function Pricing() {
       <span style={{ fontSize: 14, color: promoMintColors.text }}>{children}</span>
     </Stack>
   );
-
-  /* ---------- Styles ---------- */
 
   const cardStyle = (plan) => ({
     borderRadius: 20,
@@ -392,36 +311,20 @@ export default function Pricing() {
   };
 
   const freeButtonStyle = promoMintStyles.secondaryButton;
-
   const premiumButtonStyle = promoMintStyles.primaryButton;
-
   const mutedTextStyle = { color: promoMintColors.mutedText };
-
   const pageIntroStyle = {
     color: promoMintColors.mutedText,
     marginBottom: 18,
   };
-
   const priceStyle = { fontSize: 34, color: promoMintColors.text };
-
   const sectionSpacingStyle = { marginTop: 14 };
-
   const actionSpacingStyle = { marginTop: 18 };
-
   const cardHeadingStyle = { color: promoMintColors.text };
 
   const planPageTitle = "Choose your PromoMint plan";
-
   const planIntro =
     "Pick the plan that matches how many coupon offers you want to feature on your product pages.";
-
-  const planPageTitleContent = (
-    <div style={pageIntroStyle}>{planIntro}</div>
-  );
-
-  const pageTitle = planPageTitle;
-
-  const pageSubtitle = planPageTitleContent;
 
   const pageContent = (
     <Layout>
@@ -429,15 +332,11 @@ export default function Pricing() {
         <Card sectioned style={cardStyle("free")}>
           <Stack alignment="center" distribution="equalSpacing">
             <h2 style={cardHeadingStyle}>Free</h2>
-            {isCurrent("free") && (
-              <span style={currentBadge}>Current</span>
-            )}
+            {isCurrent("free") && <span style={currentBadge}>Current</span>}
           </Stack>
 
           <h1 style={priceStyle}>$0</h1>
-          <p style={mutedTextStyle}>
-            A simple option for smaller catalogs
-          </p>
+          <p style={mutedTextStyle}>A simple option for smaller catalogs</p>
 
           <Stack vertical spacing="loose" style={sectionSpacingStyle}>
             <Feature>Display coupon offers on product pages</Feature>
@@ -451,7 +350,7 @@ export default function Pricing() {
             <Button
               fullWidth
               style={freeButtonStyle}
-              disabled={isCurrent("free") || loading.page || !!loading.action}
+              disabled={!hasResolvedPlan || isCurrent("free") || loading.page || !!loading.action}
               loading={loading.action === "free"}
               onClick={() => openConfirm("free")}
             >
@@ -468,9 +367,7 @@ export default function Pricing() {
             {!isCurrent("premium") && (
               <span style={popularBadge}>Popular choice</span>
             )}
-            {isCurrent("premium") && (
-              <span style={currentBadge}>Current</span>
-            )}
+            {isCurrent("premium") && <span style={currentBadge}>Current</span>}
           </Stack>
 
           <h1 style={priceStyle}>${PRICE}</h1>
@@ -490,13 +387,11 @@ export default function Pricing() {
             <Button
               fullWidth
               style={premiumButtonStyle}
-              disabled={isCurrent("premium") || loading.page || !!loading.action}
+              disabled={!hasResolvedPlan || isCurrent("premium") || loading.page || !!loading.action}
               loading={loading.action === "premium"}
               onClick={() => openConfirm("premium")}
             >
-              {isCurrent("premium")
-                ? "Premium is active"
-                : "Choose Premium"}
+              {isCurrent("premium") ? "Premium is active" : "Choose Premium"}
             </Button>
           </div>
         </Card>
@@ -536,7 +431,10 @@ export default function Pricing() {
         </Modal.Section>
       </Modal>
 
-      <Page title={pageTitle} subtitle={pageSubtitle}>
+      <Page
+        title={planPageTitle}
+        subtitle={<div style={pageIntroStyle}>{planIntro}</div>}
+      >
         {!!banner.msg && (
           <Banner
             status={banner.status}
@@ -550,6 +448,13 @@ export default function Pricing() {
           <Banner status="info">
             We’re checking your current plan. You can still review the options
             below while that loads.
+          </Banner>
+        ) : null}
+
+        {!loading.page && !hasResolvedPlan ? (
+          <Banner status="critical">
+            We couldn’t confirm your current plan yet. Reopen the app from Shopify
+            admin and try again.
           </Banner>
         ) : null}
 

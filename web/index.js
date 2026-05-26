@@ -939,7 +939,13 @@ app.get("/api/cancelSubscription", async (req, res) => {
     session = activeSession;
 
     if (!billing?.hasActivePayment) {
-      return res.send({ status: "No subscription found" });
+      await MetafieldService.setShopMetafield(session, "free");
+      return res.send({
+        status: "No subscription found",
+        cancelledPlan: null,
+        hasActiveSubscription: false,
+        tier: "free",
+      });
     }
 
     const status = await withSessionRefresh(req, session, async (resolvedSession) => {
@@ -953,6 +959,8 @@ app.get("/api/cancelSubscription", async (req, res) => {
     res.send({
       status,
       cancelledPlan: PREMIUM_PLAN,
+      hasActiveSubscription: false,
+      tier: "free",
     });
   } catch (err) {
     if (err instanceof BillingError) {

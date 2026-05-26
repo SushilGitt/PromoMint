@@ -30,13 +30,9 @@ async function getActiveSubscriptionId(session) {
     return matchingSubscription.id;
   }
 
-  if (subscriptions.length === 1 && subscriptions[0]?.id) {
-    return subscriptions[0].id;
-  }
-
-  if (subscriptions.length > 1) {
+  if (subscriptions.length > 0) {
     throw new Error(
-      "Multiple active subscriptions found, but none matched the Premium plan."
+      "Active subscriptions were found, but none matched the Premium plan."
     );
   }
 
