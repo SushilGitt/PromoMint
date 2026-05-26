@@ -451,7 +451,7 @@ export default function Pricing() {
             <Button
               fullWidth
               style={freeButtonStyle}
-              disabled={isCurrent("free") || loading.page || !!loading.action || !selectedPlan}
+              disabled={isCurrent("free") || loading.page || !!loading.action}
               loading={loading.action === "free"}
               onClick={() => openConfirm("free")}
             >
@@ -490,7 +490,7 @@ export default function Pricing() {
             <Button
               fullWidth
               style={premiumButtonStyle}
-              disabled={isCurrent("premium") || loading.page || !!loading.action || !selectedPlan}
+              disabled={isCurrent("premium") || loading.page || !!loading.action}
               loading={loading.action === "premium"}
               onClick={() => openConfirm("premium")}
             >
