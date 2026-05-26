@@ -3,6 +3,72 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Provider } from "@shopify/app-bridge-react";
 import { Banner, Layout, Page } from "@shopify/polaris";
 
+const decodeHost = (host) => {
+  if (!host) return "";
+
+  try {
+    return atob(host.replace(/-/g, "+").replace(/_/g, "/"));
+  } catch {
+    return "";
+  }
+};
+
+const getEmbeddedShop = (host) => {
+  const decodedHost = decodeHost(host);
+  if (!decodedHost) return "";
+
+  const adminStoreMatch = decodedHost.match(/\/store\/([^/?]+)/);
+  if (adminStoreMatch?.[1]) {
+    return `${adminStoreMatch[1]}.myshopify.com`;
+  }
+
+  const directShopMatch = decodedHost.match(
+    /([a-z0-9][a-z0-9-]*\.myshopify\.com)/i
+  );
+
+  return directShopMatch?.[1] || "";
+};
+
+const withEmbeddedParams = (path, currentSearch) => {
+  if (!path.startsWith("/")) {
+    return path;
+  }
+
+  const [pathname, existingQuery = ""] = path.split("?");
+  const nextParams = new URLSearchParams(existingQuery);
+  const currentParams = new URLSearchParams(currentSearch);
+  const host = currentParams.get("host") || window.__SHOPIFY_DEV_HOST || "";
+  const shop = currentParams.get("shop") || getEmbeddedShop(host);
+
+  if (host && !nextParams.has("host")) {
+    nextParams.set("host", host);
+  }
+
+  if (shop && !nextParams.has("shop")) {
+    nextParams.set("shop", shop);
+  }
+
+  const query = nextParams.toString();
+  return query ? `${pathname}?${query}` : pathname;
+};
+
+const getStableEmbeddedSearch = (search) => {
+  const params = new URLSearchParams(search);
+  const host = params.get("host") || window.__SHOPIFY_DEV_HOST || "";
+  const shop = params.get("shop") || getEmbeddedShop(host);
+  const embeddedParams = new URLSearchParams();
+
+  if (host) {
+    embeddedParams.set("host", host);
+  }
+
+  if (shop) {
+    embeddedParams.set("shop", shop);
+  }
+
+  return embeddedParams.toString();
+};
+
 /**
  * A component to configure App Bridge.
  * @desc A thin wrapper around AppBridgeProvider that provides the following capabilities:
@@ -16,18 +82,31 @@ export function AppBridgeProvider({ children }) {
   const shopifyApiKey = process.env.SHOPIFY_API_KEY;
   const location = useLocation();
   const navigate = useNavigate();
+  const embeddedSearch = useMemo(
+    () => getStableEmbeddedSearch(location.search),
+    [location.search]
+  );
+  const embeddedLocation = useMemo(
+    () => ({
+      ...location,
+      search: embeddedSearch ? `?${embeddedSearch}` : "",
+    }),
+    [embeddedSearch, location]
+  );
   const history = useMemo(
     () => ({
       replace: (path) => {
-        navigate(path, { replace: true });
+        navigate(withEmbeddedParams(path, embeddedLocation.search), {
+          replace: true,
+        });
       },
     }),
-    [navigate]
+    [embeddedLocation.search, navigate]
   );
 
   const routerConfig = useMemo(
-    () => ({ history, location }),
-    [history, location]
+    () => ({ history, location: embeddedLocation }),
+    [embeddedLocation, history]
   );
 
   // The host may be present initially, but later removed by navigation.
