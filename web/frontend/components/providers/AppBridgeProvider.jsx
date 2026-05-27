@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Provider } from "@shopify/app-bridge-react";
 import { Banner, Layout, Page } from "@shopify/polaris";
@@ -52,6 +52,60 @@ const withEmbeddedParams = (path, currentSearch) => {
   return query ? `${pathname}?${query}` : pathname;
 };
 
+const isRootPath = (path) => {
+  if (!path.startsWith("/")) {
+    return false;
+  }
+
+  try {
+    const normalized = new URL(path, "https://promomint.local");
+    return normalized.pathname === "/";
+  } catch {
+    return false;
+  }
+};
+
+const shouldIgnoreInitialRootReplace = (path, pathname, didIgnore) =>
+  isRootPath(path) && pathname !== "/" && !didIgnore;
+
+const resolveAppBridgePath = (path, currentPathname, currentSearch, didIgnore) => {
+  if (shouldIgnoreInitialRootReplace(path, currentPathname, didIgnore)) {
+    return null;
+  }
+
+  return withEmbeddedParams(path, currentSearch);
+};
+
+const getNavigationTargetPathname = (path) => {
+  if (!path.startsWith("/")) {
+    return "";
+  }
+
+  try {
+    return new URL(path, "https://promomint.local").pathname;
+  } catch {
+    return "";
+  }
+};
+
+const shouldIgnoreNavigationToCurrentRoute = (path, pathname, search) => {
+  const targetPathname = getNavigationTargetPathname(path);
+  return targetPathname === pathname && !new URLSearchParams(search).toString();
+};
+
+const resolveNavigationDestination = (path, pathname, search, didIgnore) => {
+  const resolvedPath = resolveAppBridgePath(path, pathname, search, didIgnore);
+  if (!resolvedPath) {
+    return null;
+  }
+
+  if (shouldIgnoreNavigationToCurrentRoute(path, pathname, search)) {
+    return null;
+  }
+
+  return resolvedPath;
+};
+
 const getStableEmbeddedSearch = (search) => {
   const params = new URLSearchParams(search);
   const host = params.get("host") || window.__SHOPIFY_DEV_HOST || "";
@@ -86,6 +140,7 @@ export function AppBridgeProvider({ children }) {
     () => getStableEmbeddedSearch(location.search),
     [location.search]
   );
+  const ignoredInitialRootReplaceRef = useRef(false);
   const embeddedLocation = useMemo(
     () => ({
       ...location,
@@ -96,12 +151,30 @@ export function AppBridgeProvider({ children }) {
   const history = useMemo(
     () => ({
       replace: (path) => {
-        navigate(withEmbeddedParams(path, embeddedLocation.search), {
+        const nextPath = resolveNavigationDestination(
+          path,
+          embeddedLocation.pathname,
+          embeddedLocation.search,
+          ignoredInitialRootReplaceRef.current
+        );
+
+        if (!nextPath) {
+          if (shouldIgnoreInitialRootReplace(
+            path,
+            embeddedLocation.pathname,
+            ignoredInitialRootReplaceRef.current
+          )) {
+            ignoredInitialRootReplaceRef.current = true;
+          }
+          return;
+        }
+
+        navigate(nextPath, {
           replace: true,
         });
       },
     }),
-    [embeddedLocation.search, navigate]
+    [embeddedLocation.pathname, embeddedLocation.search, navigate]
   );
 
   const routerConfig = useMemo(
