@@ -18,6 +18,7 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import {
   useAuthenticatedFetch,
   isReauthorizationInProgressError,
+  hasRecentReauthAttempt,
 } from "../hooks";
 
 const PENDING_PLAN_STORAGE_KEY = "promomint:pendingPlan";
@@ -602,7 +603,7 @@ export default function Pricing() {
           </Banner>
         ) : null}
 
-        {!loading.page && !hasResolvedPlan ? (
+        {!loading.page && !hasResolvedPlan && !hasRecentReauthAttempt() ? (
           <Banner status="critical">
             We couldn’t confirm your current plan yet. Reopen the app from Shopify
             admin and try again.

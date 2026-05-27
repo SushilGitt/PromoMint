@@ -66,6 +66,16 @@ export function useAuthenticatedFetch() {
       throw new ReauthorizationInProgressError();
     }
 
+    const statusHandled = await checkStatusForReauthorization(
+      response,
+      app,
+      reauthPlan
+    );
+
+    if (statusHandled) {
+      throw new ReauthorizationInProgressError();
+    }
+
     return response;
   };
 }
@@ -115,6 +125,19 @@ async function checkJsonForReauthorization(response, app, pendingPlan) {
   } catch {
     return false;
   }
+}
+
+async function checkStatusForReauthorization(response, app, pendingPlan) {
+  if (response.status !== 401) {
+    return false;
+  }
+
+  return beginReauthorization(app, {
+    authUrl: "/api/auth",
+    shop: getCurrentShop(),
+    pendingPlan,
+    reason: "session",
+  });
 }
 
 function beginReauthorization(app, { authUrl, shop, pendingPlan, reason }) {
