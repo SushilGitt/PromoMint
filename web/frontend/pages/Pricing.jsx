@@ -15,7 +15,10 @@ import { promoMintColors, promoMintStyles } from "../brand";
 import { CircleTickMinor } from "@shopify/polaris-icons";
 import { Redirect } from "@shopify/app-bridge/actions";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import { useAuthenticatedFetch } from "../hooks";
+import {
+  useAuthenticatedFetch,
+  isReauthorizationInProgressError,
+} from "../hooks";
 
 const PENDING_PLAN_STORAGE_KEY = "promomint:pendingPlan";
 const RETURN_TO_STORAGE_KEY = "promomint:returnTo";
@@ -272,7 +275,7 @@ export default function Pricing() {
 
       setServerTier(data.tier);
       setBanner((currentBanner) => {
-        if (currentBanner.status === "critical") {
+        if (currentBanner.status === "critical" || currentBanner.status === "warning") {
           return { msg: "", status: null };
         }
 
@@ -281,6 +284,10 @@ export default function Pricing() {
 
       return data.tier;
     } catch (error) {
+      if (isReauthorizationInProgressError(error)) {
+        return null;
+      }
+
       if (!allowSoftFailure) {
         setServerTier(null);
         setBanner({
@@ -357,14 +364,16 @@ export default function Pricing() {
             });
           }
         } catch (error) {
-          clearPendingBillingResume();
-          setBanner({
-            msg:
-              error instanceof Error
-                ? error.message
-                : "We couldn’t resume your plan change after reauthorization.",
-            status: "critical",
-          });
+          if (!isReauthorizationInProgressError(error)) {
+            clearPendingBillingResume();
+            setBanner({
+              msg:
+                error instanceof Error
+                  ? error.message
+                  : "We couldn’t resume your plan change after reauthorization.",
+              status: "critical",
+            });
+          }
         } finally {
           setLoading((s) => ({ ...s, action: null }));
         }
@@ -395,14 +404,16 @@ export default function Pricing() {
         await refreshTier({ allowSoftFailure: true });
       }
     } catch (error) {
-      clearPendingPlan();
-      setBanner({
-        msg:
-          error instanceof Error
-            ? error.message
-            : "We couldn’t update your plan.",
-        status: "critical",
-      });
+      if (!isReauthorizationInProgressError(error)) {
+        clearPendingPlan();
+        setBanner({
+          msg:
+            error instanceof Error
+              ? error.message
+              : "We couldn’t update your plan.",
+          status: "critical",
+        });
+      }
     } finally {
       setLoading((s) => ({ ...s, action: null }));
     }

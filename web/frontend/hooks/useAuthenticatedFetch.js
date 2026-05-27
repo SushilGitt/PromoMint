@@ -20,6 +20,17 @@ const REAUTH_GUARD_WINDOW_MS = 15000;
  *
  * @returns {Function} fetch function
  */
+export class ReauthorizationInProgressError extends Error {
+  constructor(message = "Shopify authentication is being restored.") {
+    super(message);
+    this.name = "ReauthorizationInProgressError";
+  }
+}
+
+export const isReauthorizationInProgressError = (error) =>
+  error instanceof ReauthorizationInProgressError ||
+  error?.name === "ReauthorizationInProgressError";
+
 export function useAuthenticatedFetch() {
   const app = useAppBridge();
   const fetchFunction = authenticatedFetch(app);
@@ -39,8 +50,18 @@ export function useAuthenticatedFetch() {
       reauthPlan
     );
 
-    if (!headerHandled) {
-      await checkJsonForReauthorization(response, app, reauthPlan);
+    if (headerHandled) {
+      throw new ReauthorizationInProgressError();
+    }
+
+    const jsonHandled = await checkJsonForReauthorization(
+      response,
+      app,
+      reauthPlan
+    );
+
+    if (jsonHandled) {
+      throw new ReauthorizationInProgressError();
     }
 
     return response;
@@ -111,7 +132,7 @@ function beginReauthorization(app, { authUrl, shop, pendingPlan, reason }) {
     recentAttempt.reason === reason &&
     recentAttempt.route === currentRoute
   ) {
-    return false;
+    return true;
   }
 
   window.sessionStorage.setItem(RETURN_TO_STORAGE_KEY, currentRoute);

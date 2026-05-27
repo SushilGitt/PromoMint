@@ -36,6 +36,7 @@ const APP_META_KEY = "mx-pdp-coupon";
 const APP_INSTALL_METAFIELD = "mx-pdp-coupon-code-premium";
 
 const BILLING_TEST_MODE_ENV = "SHOPIFY_BILLING_TEST_MODE";
+const AUTH_RETURN_TO_COOKIE = "promomint_auth_return_to";
 
 const parseBooleanEnv = (name) => {
   const rawValue = process.env[name];
@@ -113,11 +114,64 @@ app.post(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+const setAuthReturnToCookie = (res, returnPath) => {
+  if (!returnPath) {
+    return;
+  }
+
+  res.cookie(AUTH_RETURN_TO_COOKIE, encodeURIComponent(returnPath), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 10 * 60 * 1000,
+  });
+};
+
+const clearAuthReturnToCookie = (res) => {
+  res.clearCookie(AUTH_RETURN_TO_COOKIE, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+  });
+};
+
+const readAuthReturnToCookie = (req) => {
+  const cookieHeader = req.headers.cookie || "";
+  if (!cookieHeader) {
+    return "";
+  }
+
+  const cookieValue = cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${AUTH_RETURN_TO_COOKIE}=`))
+    ?.slice(AUTH_RETURN_TO_COOKIE.length + 1);
+
+  if (!cookieValue) {
+    return "";
+  }
+
+  try {
+    return sanitizeReturnPath(decodeURIComponent(cookieValue));
+  } catch {
+    return "";
+  }
+};
+
 /* -------------------------------------------------------------------------- */
 /*                              SHOPIFY AUTH                                  */
 /* -------------------------------------------------------------------------- */
 
-app.get(shopify.config.auth.path, shopify.auth.begin());
+app.get(shopify.config.auth.path, (req, res, next) => {
+  const returnPath = sanitizeReturnPath(req.query.returnTo);
+  if (returnPath) {
+    setAuthReturnToCookie(res, returnPath);
+  }
+
+  return shopify.auth.begin()(req, res, next);
+});
 
 app.get(shopify.config.auth.callbackPath, async (req, res) => {
   try {
@@ -144,7 +198,9 @@ app.get(shopify.config.auth.callbackPath, async (req, res) => {
     }
 
     const host = shopify.api.utils.sanitizeHost(req.query.host);
-    const returnPath = sanitizeReturnPath(req.query.returnTo);
+    const returnPath =
+      sanitizeReturnPath(req.query.returnTo) || readAuthReturnToCookie(req);
+    clearAuthReturnToCookie(res);
     let redirectUrl = await shopify.api.auth.getEmbeddedAppUrl({
       rawRequest: req,
       rawResponse: res,
