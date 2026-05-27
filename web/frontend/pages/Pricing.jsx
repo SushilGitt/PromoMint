@@ -24,6 +24,7 @@ import {
 const PENDING_PLAN_STORAGE_KEY = "promomint:pendingPlan";
 const RETURN_TO_STORAGE_KEY = "promomint:returnTo";
 const REQUEST_TIMEOUT_MS = 15000;
+const REAUTH_RECOVERY_RETRY_MS = 16000;
 
 const decodeHost = (host) => {
   if (!host) return "";
@@ -73,6 +74,8 @@ export default function Pricing() {
   const fetchAuth = useAuthenticatedFetch();
   const redirect = Redirect.create(app);
   const resumeAttemptedRef = useRef(false);
+  const reauthRecoveryTimeoutRef = useRef(/** @type {ReturnType<typeof setTimeout> | null} */ (null));
+  const reauthRecoveryStartedRef = useRef(false);
 
   const shop = getCurrentShop();
   const host = getCurrentHost();
@@ -152,6 +155,34 @@ export default function Pricing() {
   const clearPendingBillingResume = () => {
     clearPendingPlan();
     clearReturnToRoute();
+  };
+
+  const clearReauthRecoveryTimeout = () => {
+    if (reauthRecoveryTimeoutRef.current) {
+      clearTimeout(reauthRecoveryTimeoutRef.current);
+      reauthRecoveryTimeoutRef.current = null;
+    }
+  };
+
+  const scheduleReauthRecovery = () => {
+    if (reauthRecoveryStartedRef.current) {
+      return;
+    }
+
+    reauthRecoveryStartedRef.current = true;
+    clearReauthRecoveryTimeout();
+    reauthRecoveryTimeoutRef.current = setTimeout(() => {
+      setLoading((s) => ({ ...s, page: false }));
+      setServerTier((currentTier) => currentTier || "free");
+      setBanner((currentBanner) =>
+        currentBanner.msg
+          ? currentBanner
+          : {
+              msg: "We’re still restoring Shopify authentication. You can continue with the Free plan now or choose Premium again after the page settles.",
+              status: "info",
+            }
+      );
+    }, REAUTH_RECOVERY_RETRY_MS);
   };
 
   const clearBillingReturnParams = () => {
@@ -274,6 +305,8 @@ export default function Pricing() {
         throw new Error("We couldn’t confirm your current plan.");
       }
 
+      clearReauthRecoveryTimeout();
+      reauthRecoveryStartedRef.current = false;
       setServerTier(data.tier);
       setBanner((currentBanner) => {
         if (currentBanner.status === "critical" || currentBanner.status === "warning") {
@@ -286,6 +319,7 @@ export default function Pricing() {
       return data.tier;
     } catch (error) {
       if (isReauthorizationInProgressError(error)) {
+        scheduleReauthRecovery();
         return null;
       }
 
@@ -382,6 +416,10 @@ export default function Pricing() {
     };
 
     initialize();
+
+    return () => {
+      clearReauthRecoveryTimeout();
+    };
   }, []);
 
   const openConfirm = (plan) => {
