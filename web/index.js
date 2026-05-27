@@ -1223,7 +1223,7 @@ app.post(
       }),
       { ok: true }
     );
-  }, { requireValidatedSession: true })
+  })
 );
 
 app.post(
@@ -1274,7 +1274,7 @@ app.post(
       },
       metafieldSync
     );
-  }, { requireValidatedSession: true })
+  })
 );
 
 app.get(
@@ -1302,7 +1302,7 @@ app.get(
       normalizePlanCheckResponse(tier),
       metafieldSync
     );
-  }, { requireValidatedSession: true })
+  })
 );
 
 /* -------------------------------------------------------------------------- */
