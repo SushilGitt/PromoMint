@@ -293,6 +293,32 @@ const appendPathToEmbeddedUrl = (embeddedUrl, returnPath) => {
   }
 };
 
+const getAppShellReturnPath = (req) => {
+  if (req.method !== "GET") return "";
+  if (req.path.startsWith("/api/")) return "";
+
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(req.query || {})) {
+    if (Array.isArray(value)) {
+      value.forEach((entry) => {
+        if (typeof entry === "string") {
+          query.append(key, entry);
+        }
+      });
+      continue;
+    }
+
+    if (typeof value === "string") {
+      query.set(key, value);
+    }
+  }
+
+  const queryString = query.toString();
+  return sanitizeReturnPath(
+    `${req.path}${queryString ? `?${queryString}` : ""}`
+  );
+};
+
 const getFailedWebhookTopics = (registrationResult) =>
   REQUIRED_WEBHOOK_TOPICS.filter((topic) => {
     const results = registrationResult?.[topic];
@@ -1295,6 +1321,15 @@ app.get("/api/getshop", shopify.validateAuthenticatedSession(), async (req, res)
 app.use(shopify.cspHeaders());
 
 app.use(serveStatic(STATIC_PATH, { index: false }));
+
+app.use("/*", (req, res, next) => {
+  const returnPath = getAppShellReturnPath(req);
+  if (returnPath) {
+    setAuthReturnToCookie(res, returnPath);
+  }
+
+  next();
+});
 
 app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res) => {
   res

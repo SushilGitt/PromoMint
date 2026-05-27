@@ -31,6 +31,8 @@ export const isReauthorizationInProgressError = (error) =>
   error instanceof ReauthorizationInProgressError ||
   error?.name === "ReauthorizationInProgressError";
 
+export const hasRecentReauthAttempt = () => !!getRecentReauthAttempt();
+
 export function useAuthenticatedFetch() {
   const app = useAppBridge();
   const fetchFunction = authenticatedFetch(app);

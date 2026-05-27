@@ -3,6 +3,7 @@ import { BrowserRouter, useLocation, useNavigate } from "react-router-dom";
 import { NavigationMenu } from "@shopify/app-bridge-react";
 import Routes from "./Routes";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { hasRecentReauthAttempt } from "./hooks";
 import {
   AppBridgeProvider,
   QueryProvider,
@@ -77,6 +78,16 @@ function ResumeStoredRoute() {
     if (!storedRoute) return;
 
     if (!storedRoute.startsWith("/")) {
+      window.sessionStorage.removeItem(RETURN_TO_STORAGE_KEY);
+      return;
+    }
+
+    if (!hasRecentReauthAttempt()) {
+      window.sessionStorage.removeItem(RETURN_TO_STORAGE_KEY);
+      return;
+    }
+
+    if (location.pathname !== "/") {
       window.sessionStorage.removeItem(RETURN_TO_STORAGE_KEY);
       return;
     }
