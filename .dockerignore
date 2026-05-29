@@ -1,3 +1,11 @@
 web/node_modules
 web/frontend/node_modules
 web/frontend/dist
+
+# Never bake local env files into the image — runtime config comes from the
+# host (Coolify). A stray .env could silently override SCOPES/HOST/etc.
+.env
+.env.*
+web/.env
+web/.env.*
+**/.env
