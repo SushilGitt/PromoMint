@@ -532,9 +532,10 @@ const checkBillingState = async (req, session) => {
 };
 
 const withBillingErrorHandling = async (req, res, session, err, contextLabel) => {
-  // Shared context so no billing/session failure is ever silent again. The
-  // granted scopes are the key signal for diagnosing a "Forbidden" from the
-  // billing API (a token missing read_own_subscription).
+  // Shared context so no billing/session failure is ever silent again. A
+  // "Forbidden" from the Billing API usually means the app is not using public
+  // distribution (the Billing API needs no scope but does need a public app),
+  // or the Admin token is under-scoped; logging the granted scopes disambiguates.
   const logContext = {
     shop: session?.shop,
     statusCode: getErrorStatusCode(err),
@@ -877,10 +878,10 @@ const isBillingScopeError = (err) => {
 };
 
 // A 403 from billing.check / the Admin API is usually NOT a BillingError (it's
-// a GraphqlQueryError / HttpResponseError) and almost always means the access
-// token is missing billing scopes (read_own_subscription). Treat it as a
-// billing-scope reauth so the merchant re-grants instead of looping silently
-// through plain session reauthorization.
+// a GraphqlQueryError / HttpResponseError). It means the app cannot use the
+// Billing API yet (app not on public distribution) or the Admin token is
+// under-scoped. Surface it as an actionable reauth/approval prompt instead of
+// looping silently through plain session reauthorization.
 const isForbiddenScopeError = (err) => {
   if (getErrorStatusCode(err) !== 403) return false;
 

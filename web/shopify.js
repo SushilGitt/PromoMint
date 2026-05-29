@@ -9,10 +9,12 @@ import {
 } from "./mongo-config.js";
 const PREMIUM_PLAN = "Premium";
 const PREMIUM_PLAN_PRICE = 19;
-const REQUIRED_BILLING_SCOPES = [
-  "read_own_subscription",
-  "write_own_subscription",
-];
+// NOTE: The Shopify App Billing API (charging merchants for this app) requires
+// NO dedicated access scope — an app can always manage its own subscriptions.
+// It does require the app to use *public* distribution. The previously
+// configured "read_own_subscription"/"write_own_subscription" scopes are not
+// valid Shopify scopes (Shopify rejects them on `app deploy`), which is why the
+// granted token only had `write_products` and billing.check returned 403.
 const shopifyHost = process.env.HOST?.replace(/https?:\/\//, "");
 const shopifyScopes = (process.env.SCOPES || "")
   .split(",")
@@ -33,16 +35,6 @@ if (!shopifyHost) {
 
 if (!shopifyScopes.length) {
   throw new Error("Missing SCOPES configuration for Shopify app setup.");
-}
-
-const missingBillingScopes = REQUIRED_BILLING_SCOPES.filter(
-  (scope) => !shopifyScopes.includes(scope)
-);
-
-if (missingBillingScopes.length) {
-  throw new Error(
-    `Missing required Shopify billing scopes: ${missingBillingScopes.join(", ")}. Update SCOPES and reinstall or reauthorize the app.`
-  );
 }
 
 const shopify = shopifyApp({

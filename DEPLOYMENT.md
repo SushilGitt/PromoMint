@@ -7,7 +7,7 @@ Set these runtime variables for the backend service:
 ```env
 SHOPIFY_API_KEY=your_shopify_api_key
 SHOPIFY_API_SECRET=your_shopify_api_secret
-SCOPES=write_products,read_products,read_own_subscription,write_own_subscription
+SCOPES=write_products,read_products
 HOST=https://your-app-domain.com
 PORT=3000
 BACKEND_PORT=3000
