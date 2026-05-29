@@ -5,7 +5,7 @@ import { Redirect } from "@shopify/app-bridge/actions";
 const RETURN_TO_STORAGE_KEY = "promomint:returnTo";
 const PENDING_PLAN_STORAGE_KEY = "promomint:pendingPlan";
 const REAUTH_GUARD_STORAGE_KEY = "promomint:reauthGuard";
-const REAUTH_GUARD_WINDOW_MS = 15000;
+const REAUTH_GUARD_WINDOW_MS = 60000;
 
 /**
  * A hook that returns an auth-aware fetch function.
@@ -39,11 +39,26 @@ export function useAuthenticatedFetch() {
 
   return async (uri, options = {}) => {
     const { reauthPlan = "", ...fetchOptions } = options || {};
-    const response = await fetchFunction(uri, fetchOptions);
+    let response = await fetchFunction(uri, fetchOptions);
 
     if (response.ok) {
       clearRecentReauthAttempt();
       return response;
+    }
+
+    // A 401 (or a reauthorize-header response) is usually just a stale session
+    // token. App Bridge mints a fresh token on every authenticatedFetch call
+    // and the backend re-exchanges it for an offline token, so retry once
+    // silently before resorting to a heavy full-page reauthorization redirect.
+    // A 401 means the request was rejected before the handler ran (getSession
+    // returned null), so retrying a POST does not double-apply a mutation.
+    if (shouldRetryBeforeReauth(response)) {
+      const retryResponse = await fetchFunction(uri, fetchOptions);
+      if (retryResponse.ok) {
+        clearRecentReauthAttempt();
+        return retryResponse;
+      }
+      response = retryResponse;
     }
 
     const headerHandled = await checkHeadersForReauthorization(
@@ -66,18 +81,15 @@ export function useAuthenticatedFetch() {
       throw new ReauthorizationInProgressError();
     }
 
-    const statusHandled = await checkStatusForReauthorization(
-      response,
-      app,
-      reauthPlan
-    );
-
-    if (statusHandled) {
-      throw new ReauthorizationInProgressError();
-    }
-
     return response;
   };
+}
+
+function shouldRetryBeforeReauth(response) {
+  return (
+    response.status === 401 ||
+    response.headers.get("X-Shopify-API-Request-Failure-Reauthorize") === "1"
+  );
 }
 
 async function checkHeadersForReauthorization(response, app, pendingPlan) {
@@ -127,19 +139,6 @@ async function checkJsonForReauthorization(response, app, pendingPlan) {
   }
 }
 
-async function checkStatusForReauthorization(response, app, pendingPlan) {
-  if (response.status !== 401) {
-    return false;
-  }
-
-  return beginReauthorization(app, {
-    authUrl: "/api/auth",
-    shop: getCurrentShop(),
-    pendingPlan,
-    reason: "session",
-  });
-}
-
 function beginReauthorization(app, { authUrl, shop, pendingPlan, reason }) {
   const currentRoute = getCurrentRoute();
   const currentHost = getCurrentHost();
@@ -151,12 +150,11 @@ function beginReauthorization(app, { authUrl, shop, pendingPlan, reason }) {
     return false;
   }
 
+  // If any reauthorization is already in flight within the guard window, do
+  // not fire another full-page redirect — regardless of route or reason. This
+  // is what prevents the OAuth reload loop when several API calls 401 at once.
   const recentAttempt = getRecentReauthAttempt();
-  if (
-    recentAttempt &&
-    recentAttempt.reason === reason &&
-    recentAttempt.route === currentRoute
-  ) {
+  if (recentAttempt) {
     return true;
   }
 

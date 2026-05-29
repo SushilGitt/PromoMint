@@ -173,12 +173,14 @@ export default function Pricing() {
     clearReauthRecoveryTimeout();
     reauthRecoveryTimeoutRef.current = setTimeout(() => {
       setLoading((s) => ({ ...s, page: false }));
-      setServerTier((currentTier) => currentTier || "free");
+      // Do NOT fake a "free" tier here — leaving serverTier null keeps the plan
+      // buttons disabled (hasResolvedPlan === false) and avoids the misleading
+      // "no plan active" state while we are genuinely still connecting.
       setBanner((currentBanner) =>
         currentBanner.msg
           ? currentBanner
           : {
-              msg: "We’re still restoring Shopify authentication. You can continue with the Free plan now or choose Premium again after the page settles.",
+              msg: "We’re still connecting to Shopify. Reopen the app from Shopify admin or reload this page to finish loading your plan.",
               status: "info",
             }
       );
@@ -212,6 +214,17 @@ export default function Pricing() {
           "Authentication is being restored. If the page does not recover, reopen the app from Shopify admin and try again."
         )
       );
+    }
+
+    if (response.status === 400 && data?.billingModeMismatch) {
+      const mismatchError = new Error(
+        getErrorMessage(
+          data,
+          "This store has a subscription created in a different billing mode than the app is currently running in."
+        )
+      );
+      mismatchError.billingModeMismatch = true;
+      throw mismatchError;
     }
 
     if (!response.ok) {
@@ -320,6 +333,23 @@ export default function Pricing() {
     } catch (error) {
       if (isReauthorizationInProgressError(error)) {
         scheduleReauthRecovery();
+        return null;
+      }
+
+      // A billing-mode mismatch is a configuration problem, not a reauth or a
+      // transient failure — always surface it clearly and never drift to a
+      // recovered tier.
+      if (error?.billingModeMismatch) {
+        clearReauthRecoveryTimeout();
+        reauthRecoveryStartedRef.current = false;
+        setServerTier(null);
+        setBanner({
+          msg:
+            error instanceof Error
+              ? error.message
+              : "This store’s subscription billing mode does not match the app.",
+          status: "critical",
+        });
         return null;
       }
 

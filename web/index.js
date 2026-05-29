@@ -75,12 +75,6 @@ const HTTP_STATUS = {
   INTERNAL_SERVER_ERROR: 500,
 };
 
-const REQUIRED_WEBHOOK_TOPICS = [
-  "CUSTOMERS_DATA_REQUEST",
-  "CUSTOMERS_REDACT",
-  "SHOP_REDACT",
-];
-
 /* -------------------------------------------------------------------------- */
 /*                               EXPRESS SERVER                               */
 /* -------------------------------------------------------------------------- */
@@ -187,15 +181,10 @@ app.get(shopify.config.auth.callbackPath, async (req, res) => {
       session: callbackResponse.session,
     };
 
-    if (!callbackResponse.session.isOnline) {
-      const existingOfflineSession = await loadSessionForShop(
-        callbackResponse.session.shop
-      );
-
-      await registerRequiredWebhooksAfterAuth(callbackResponse.session, {
-        allowFailure: !!existingOfflineSession?.accessToken,
-      });
-    }
+    // Compliance webhooks (customers/data_request, customers/redact,
+    // shop/redact) and app/uninstalled are declared in shopify.app.toml and
+    // managed by Shopify — they are NOT registerable via the Admin GraphQL
+    // API. No manual webhook registration is needed here.
 
     const host = shopify.api.utils.sanitizeHost(req.query.host);
     const returnPath =
@@ -317,60 +306,6 @@ const getAppShellReturnPath = (req) => {
   return sanitizeReturnPath(
     `${req.path}${queryString ? `?${queryString}` : ""}`
   );
-};
-
-const getFailedWebhookTopics = (registrationResult) =>
-  REQUIRED_WEBHOOK_TOPICS.filter((topic) => {
-    const results = registrationResult?.[topic];
-    return !Array.isArray(results) || results.some((result) => !result?.success);
-  });
-
-const registerRequiredWebhooksAfterAuth = async (
-  session,
-  { allowFailure = false } = {}
-) => {
-  try {
-    const registrationResult = await shopify.api.webhooks.register({ session });
-    const failedTopics = getFailedWebhookTopics(registrationResult);
-
-    if (!failedTopics.length) {
-      return;
-    }
-
-    const details = {
-      shop: session.shop,
-      failedTopics,
-      registrationResult,
-    };
-
-    if (allowFailure) {
-      console.warn(
-        "[auth/callback] Webhook registration failed during reauthorization; continuing with existing installation state.",
-        details
-      );
-      return;
-    }
-
-    console.error("[auth/callback] Mandatory webhook registration failed:", details);
-  } catch (error) {
-    if (allowFailure) {
-      console.warn(
-        "[auth/callback] Webhook registration threw during reauthorization; continuing with existing installation state.",
-        {
-          shop: session.shop,
-          error: error instanceof Error ? error.message : String(error),
-        }
-      );
-      return;
-    }
-
-    console.error("[auth/callback] Mandatory webhook registration threw:", {
-      shop: session.shop,
-      error,
-    });
-  }
-
-  throw new Error("Mandatory Shopify compliance webhook registration failed.");
 };
 
 const getShopFromHostParam = (hostParam) => {
@@ -522,14 +457,23 @@ const buildModeMismatchDetails = (subscription) => {
   ];
 };
 
-const sendBillingModeMismatch = (res, details, extra = {}) =>
-  res.status(HTTP_STATUS.BAD_REQUEST).json({
+const sendBillingModeMismatch = (res, subscription, extra = {}) => {
+  const details = buildModeMismatchDetails(subscription);
+  const subscriptionMode =
+    normalizeSubscriptionMode(subscription) === null
+      ? null
+      : getBillingModeLabel(subscription.test);
+
+  return res.status(HTTP_STATUS.BAD_REQUEST).json({
     billingModeMismatch: true,
     mode: getBillingModeLabel(BILLING_IS_TEST),
+    appMode: getBillingModeLabel(BILLING_IS_TEST),
+    subscriptionMode,
     details,
     error: details[0],
     ...extra,
   });
+};
 
 const syncTierMetafield = async (session, tier, options = {}) => {
   const { ensureInstallation = false, deleteInstallation = false } = options;
@@ -1130,11 +1074,7 @@ app.get("/api/scroll-to-top/hasSubscription", async (req, res) => {
       : null;
 
     if (mismatchSubscription) {
-      return sendBillingModeMismatch(
-        res,
-        buildModeMismatchDetails(mismatchSubscription),
-        { shop }
-      );
+      return sendBillingModeMismatch(res, mismatchSubscription, { shop });
     }
 
     const tier = billing?.hasActivePayment ? "premium" : "free";
@@ -1178,11 +1118,9 @@ app.post(
     session = billingState.session;
 
     if (billingState.mismatchSubscription) {
-      return sendBillingModeMismatch(
-        res,
-        buildModeMismatchDetails(billingState.mismatchSubscription),
-        { shop: session.shop }
-      );
+      return sendBillingModeMismatch(res, billingState.mismatchSubscription, {
+        shop: session.shop,
+      });
     }
 
     if (billingState.billing?.hasActivePayment) {
@@ -1233,11 +1171,9 @@ app.post(
     session = billingState.session;
 
     if (billingState.mismatchSubscription) {
-      return sendBillingModeMismatch(
-        res,
-        buildModeMismatchDetails(billingState.mismatchSubscription),
-        { shop: session.shop }
-      );
+      return sendBillingModeMismatch(res, billingState.mismatchSubscription, {
+        shop: session.shop,
+      });
     }
 
     if (!billingState.billing?.hasActivePayment) {
@@ -1284,11 +1220,9 @@ app.get(
     session = billingState.session;
 
     if (billingState.mismatchSubscription) {
-      return sendBillingModeMismatch(
-        res,
-        buildModeMismatchDetails(billingState.mismatchSubscription),
-        { shop: session.shop }
-      );
+      return sendBillingModeMismatch(res, billingState.mismatchSubscription, {
+        shop: session.shop,
+      });
     }
 
     const tier = billingState.billing?.hasActivePayment ? "premium" : "free";
@@ -1331,7 +1265,14 @@ app.use("/*", (req, res, next) => {
   next();
 });
 
-app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res) => {
+// Serve the SPA shell unconditionally. The HTML holds no secrets — it boots
+// App Bridge, which mints a session token that the backend exchanges for an
+// offline token on the first API call (see getSession ->
+// exchangeOfflineTokenFromRequest). Gating the document request on
+// ensureInstalledOnShop() caused an OAuth reload loop whenever Shopify loaded
+// the embedded iframe without a resolvable shop param. First install still
+// runs through Shopify's managed OAuth callback (/api/auth/callback).
+app.use("/*", async (_req, res) => {
   res
     .status(200)
     .set("Content-Type", "text/html")
