@@ -532,12 +532,22 @@ const checkBillingState = async (req, session) => {
 };
 
 const withBillingErrorHandling = async (req, res, session, err, contextLabel) => {
+  // Shared context so no billing/session failure is ever silent again. The
+  // granted scopes are the key signal for diagnosing a "Forbidden" from the
+  // billing API (a token missing read_own_subscription).
+  const logContext = {
+    shop: session?.shop,
+    statusCode: getErrorStatusCode(err),
+    name: err?.name,
+    message: err instanceof Error ? err.message : String(err),
+    grantedScopes: session?.scope,
+  };
+
   if (err instanceof BillingError) {
     const details = formatBillingErrorDetails(err.errorData);
 
-    console.error(`${contextLabel} failed`, {
-      shop: session?.shop,
-      statusCode: getErrorStatusCode(err),
+    console.error(`${contextLabel} failed (BillingError)`, {
+      ...logContext,
       errorData: err.errorData,
     });
 
@@ -552,10 +562,24 @@ const withBillingErrorHandling = async (req, res, session, err, contextLabel) =>
     });
   }
 
+  if (isForbiddenScopeError(err)) {
+    console.error(
+      `${contextLabel} forbidden — access token likely missing billing scopes`,
+      logContext
+    );
+    const reauthShop = await resolveReauthShop(req, session);
+    return sendBillingReauthorizationRequired(res, reauthShop);
+  }
+
   if (isUnauthorizedError(err)) {
+    console.warn(
+      `${contextLabel} unauthorized — requesting session reauthorization`,
+      logContext
+    );
     return sendReauthorizationRequired(req, res, session);
   }
 
+  console.error(`${contextLabel} failed (unhandled)`, logContext);
   const error = err instanceof Error ? err : new Error(String(err));
   return handleError(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, error.message);
 };
@@ -630,6 +654,10 @@ const runBillingEndpoint = (handler, { requireValidatedSession = false } = {}) =
       session = await getSession(req, res);
 
       if (!session) {
+        console.warn("[session] No usable session for billing request", {
+          shop: await getShopFromRequest(req),
+          hadBearer: !!getBearerTokenFromRequest(req),
+        });
         return sendReauthorizationRequired(req, res, session, {
           error: "Authentication context is missing. Reopen the app from Shopify admin and try again.",
         });
@@ -845,6 +873,31 @@ const isBillingScopeError = (err) => {
     messageParts.includes("scope") ||
     messageParts.includes("subscription") ||
     messageParts.includes("permission")
+  );
+};
+
+// A 403 from billing.check / the Admin API is usually NOT a BillingError (it's
+// a GraphqlQueryError / HttpResponseError) and almost always means the access
+// token is missing billing scopes (read_own_subscription). Treat it as a
+// billing-scope reauth so the merchant re-grants instead of looping silently
+// through plain session reauthorization.
+const isForbiddenScopeError = (err) => {
+  if (getErrorStatusCode(err) !== 403) return false;
+
+  const messageParts = [
+    err?.message,
+    ...(Array.isArray(err?.errorData) ? formatBillingErrorDetails(err.errorData) : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    messageParts.includes("forbidden") ||
+    messageParts.includes("scope") ||
+    messageParts.includes("permission") ||
+    messageParts.includes("access denied") ||
+    messageParts.includes("not approved")
   );
 };
 
