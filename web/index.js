@@ -1302,6 +1302,58 @@ app.get("/api/getshop", shopify.validateAuthenticatedSession(), async (req, res)
   res.json({ shop: session?.shop || null });
 });
 
+// TEMPORARY diagnostic — isolate whether the Admin API 403 is token-global or
+// billing-specific. Secret-gated; returns statuses only (never the token).
+// REMOVE after diagnosis.
+app.get("/api/_diag_billing", async (req, res) => {
+  if (req.query.key !== "dx7k2p9qz-promomint-diag") {
+    return res.status(404).end();
+  }
+
+  const shop =
+    (typeof req.query.shop === "string" && req.query.shop.trim()) ||
+    "devstore0-v9c6gdin.myshopify.com";
+
+  const session = await loadSessionForShop(shop);
+  if (!session) {
+    return res.json({ error: "no offline session for shop", shop });
+  }
+
+  const out = {
+    shop,
+    sessionId: session.id,
+    scope: session.scope,
+    tokenPrefix: (session.accessToken || "").slice(0, 6),
+    tokenLen: (session.accessToken || "").length,
+    apiVersion: shopify.api.config.apiVersion,
+    billingIsTest: BILLING_IS_TEST,
+  };
+
+  const client = createGraphQLClient(session);
+  const probe = async (label, query) => {
+    try {
+      await client.request(query);
+      out[label] = { ok: true };
+    } catch (err) {
+      out[label] = {
+        ok: false,
+        status: getErrorStatusCode(err),
+        name: err?.name,
+        msg: (err instanceof Error ? err.message : String(err)).slice(0, 240),
+      };
+    }
+  };
+
+  await probe("shop", `{ shop { name myshopifyDomain } }`);
+  await probe("currentAppInstallation", `{ currentAppInstallation { id } }`);
+  await probe(
+    "activeSubscriptions",
+    `{ currentAppInstallation { activeSubscriptions { name status test } } }`
+  );
+
+  return res.json(out);
+});
+
 /* -------------------------------------------------------------------------- */
 /*                              FRONTEND SERVING                              */
 /* -------------------------------------------------------------------------- */
