@@ -778,40 +778,18 @@ const getSession = async (req, res) => {
   const shop = await getShopFromRequest(req);
   const sessionToken = getBearerTokenFromRequest(req);
 
-  // TEMP diag: which path does getSession take on a real browser request?
-  let diagExchange = "not-attempted";
-
   if (sessionToken && shop) {
     const exchangedSession = await exchangeOfflineTokenFromRequest(req, shop);
     if (exchangedSession?.accessToken) {
-      console.log("[diag getSession] used token-exchange (expiring)", {
-        shop,
-        scope: exchangedSession.scope,
-        expires: exchangedSession.expires,
-      });
       return exchangedSession;
     }
-    diagExchange = "attempted-failed";
   }
 
   const storedSession = await loadSessionForShop(shop);
   if (storedSession?.accessToken) {
-    console.log("[diag getSession] FELL BACK to stored token", {
-      shop,
-      hasBearer: !!sessionToken,
-      exchange: diagExchange,
-      storedScope: storedSession.scope,
-      storedExpires: storedSession.expires,
-      storedNonExpiring: storedSession.expires == null,
-    });
     return storedSession;
   }
 
-  console.log("[diag getSession] no session at all", {
-    shop,
-    hasBearer: !!sessionToken,
-    exchange: diagExchange,
-  });
   return null;
 };
 
@@ -1381,88 +1359,6 @@ app.get(
 app.get("/api/getshop", shopify.validateAuthenticatedSession(), async (req, res) => {
   const session = await getSession(req, res);
   res.json({ shop: session?.shop || null });
-});
-
-// TEMPORARY diagnostic — isolate whether the Admin API 403 is token-global or
-// billing-specific. Secret-gated; returns statuses only (never the token).
-// REMOVE after diagnosis.
-app.get("/api/_diag_billing", async (req, res) => {
-  if (req.query.key !== "dx7k2p9qz-promomint-diag") {
-    return res.status(404).end();
-  }
-
-  const shop =
-    (typeof req.query.shop === "string" && req.query.shop.trim()) ||
-    "devstore0-v9c6gdin.myshopify.com";
-
-  const session = await loadSessionForShop(shop);
-  if (!session) {
-    return res.json({ error: "no offline session for shop", shop });
-  }
-
-  const out = {
-    shop,
-    sessionId: session.id,
-    scope: session.scope,
-    tokenPrefix: (session.accessToken || "").slice(0, 6),
-    tokenLen: (session.accessToken || "").length,
-    apiVersion: shopify.api.config.apiVersion,
-    billingIsTest: BILLING_IS_TEST,
-  };
-
-  const client = createGraphQLClient(session);
-  const probe = async (label, query) => {
-    try {
-      await client.request(query);
-      out[label] = { ok: true };
-    } catch (err) {
-      out[label] = {
-        ok: false,
-        status: getErrorStatusCode(err),
-        name: err?.name,
-        msg: (err instanceof Error ? err.message : String(err)).slice(0, 240),
-      };
-    }
-  };
-
-  await probe("shop", `{ shop { name myshopifyDomain } }`);
-  await probe("currentAppInstallation", `{ currentAppInstallation { id } }`);
-  await probe(
-    "activeSubscriptions",
-    `{ currentAppInstallation { activeSubscriptions { name status test } } }`
-  );
-
-  // Raw fetch to capture Shopify's actual response body + headers (the wrapped
-  // client masks them as an empty-body 403).
-  try {
-    const rawRes = await fetch(
-      `https://${shop}/admin/api/${out.apiVersion}/graphql.json`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Shopify-Access-Token": session.accessToken,
-        },
-        body: JSON.stringify({ query: `{ shop { name } }` }),
-      }
-    );
-    const bodyText = await rawRes.text();
-    out.raw = {
-      status: rawRes.status,
-      body: bodyText.slice(0, 600),
-      contentType: rawRes.headers.get("content-type"),
-      requestId: rawRes.headers.get("x-request-id"),
-      wwwAuthenticate: rawRes.headers.get("www-authenticate"),
-      shopifyApiVersionWarning: rawRes.headers.get(
-        "x-shopify-api-version-warning"
-      ),
-      location: rawRes.headers.get("location"),
-    };
-  } catch (err) {
-    out.raw = { fetchError: err instanceof Error ? err.message : String(err) };
-  }
-
-  return res.json(out);
 });
 
 /* -------------------------------------------------------------------------- */
