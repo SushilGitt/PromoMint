@@ -4,7 +4,17 @@ import { readFileSync } from "fs";
 import crypto from "crypto";
 import express from "express";
 import serveStatic from "serve-static";
-import { BillingError, RequestedTokenType } from "@shopify/shopify-api";
+import { BillingError, Session } from "@shopify/shopify-api";
+
+// Token-exchange constants (RFC 8693). We perform the exchange manually instead
+// of shopify.api.auth.tokenExchange() because the installed library version
+// does not send `expiring=1`, and Shopify now REJECTS non-expiring offline
+// tokens on the Admin API ("Non-expiring access tokens are no longer accepted").
+const TOKEN_EXCHANGE_GRANT_TYPE =
+  "urn:ietf:params:oauth:grant-type:token-exchange";
+const ID_TOKEN_SUBJECT_TYPE = "urn:ietf:params:oauth:token-type:id_token";
+const OFFLINE_ACCESS_TOKEN_TYPE =
+  "urn:shopify:params:oauth:token-type:offline-access-token";
 
 import shopify from "./shopify.js";
 import cancelSubscription, {
@@ -354,10 +364,56 @@ const exchangeOfflineTokenFromRequest = async (req, shop) => {
   if (!sessionToken || !shop) return null;
 
   try {
-    const { session } = await shopify.api.auth.tokenExchange({
-      shop,
-      sessionToken,
-      requestedTokenType: RequestedTokenType.OfflineAccessToken,
+    // Validate the App Bridge session token (signature + claims) first.
+    await shopify.api.session.decodeSessionToken(sessionToken);
+
+    const cleanShop = shopify.api.utils.sanitizeShop(shop, true);
+    const response = await fetch(
+      `https://${cleanShop}/admin/oauth/access_token`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          client_id: process.env.SHOPIFY_API_KEY,
+          client_secret: process.env.SHOPIFY_API_SECRET,
+          grant_type: TOKEN_EXCHANGE_GRANT_TYPE,
+          subject_token: sessionToken,
+          subject_token_type: ID_TOKEN_SUBJECT_TYPE,
+          requested_token_type: OFFLINE_ACCESS_TOKEN_TYPE,
+          // REQUIRED: request an EXPIRING offline token (with refresh token).
+          // Without this Shopify issues a non-expiring token that the Admin
+          // API rejects with 403.
+          expiring: "1",
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      console.warn("[session] Token exchange failed:", {
+        shop: cleanShop,
+        status: response.status,
+        body: body.slice(0, 300),
+      });
+      return null;
+    }
+
+    const data = await response.json();
+    const expiresInSeconds = Number(data.expires_in);
+    const session = new Session({
+      id: shopify.api.session.getOfflineId(cleanShop),
+      shop: cleanShop,
+      state: "",
+      isOnline: false,
+      accessToken: data.access_token,
+      scope: data.scope,
+      expires:
+        Number.isFinite(expiresInSeconds) && expiresInSeconds > 0
+          ? new Date(Date.now() + expiresInSeconds * 1000)
+          : undefined,
     });
 
     await shopify.config.sessionStorage.storeSession(session);
