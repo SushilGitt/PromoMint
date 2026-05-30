@@ -363,7 +363,10 @@ const exchangeOfflineTokenFromRequest = async (req, shop) => {
     await shopify.config.sessionStorage.storeSession(session);
     return session;
   } catch (error) {
-    console.warn("[session] Token exchange failed:", error);
+    console.warn("[session] Token exchange failed:", {
+      shop,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
 };
@@ -719,18 +722,40 @@ const getSession = async (req, res) => {
   const shop = await getShopFromRequest(req);
   const sessionToken = getBearerTokenFromRequest(req);
 
+  // TEMP diag: which path does getSession take on a real browser request?
+  let diagExchange = "not-attempted";
+
   if (sessionToken && shop) {
     const exchangedSession = await exchangeOfflineTokenFromRequest(req, shop);
     if (exchangedSession?.accessToken) {
+      console.log("[diag getSession] used token-exchange (expiring)", {
+        shop,
+        scope: exchangedSession.scope,
+        expires: exchangedSession.expires,
+      });
       return exchangedSession;
     }
+    diagExchange = "attempted-failed";
   }
 
   const storedSession = await loadSessionForShop(shop);
   if (storedSession?.accessToken) {
+    console.log("[diag getSession] FELL BACK to stored token", {
+      shop,
+      hasBearer: !!sessionToken,
+      exchange: diagExchange,
+      storedScope: storedSession.scope,
+      storedExpires: storedSession.expires,
+      storedNonExpiring: storedSession.expires == null,
+    });
     return storedSession;
   }
 
+  console.log("[diag getSession] no session at all", {
+    shop,
+    hasBearer: !!sessionToken,
+    exchange: diagExchange,
+  });
   return null;
 };
 
