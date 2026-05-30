@@ -1351,6 +1351,36 @@ app.get("/api/_diag_billing", async (req, res) => {
     `{ currentAppInstallation { activeSubscriptions { name status test } } }`
   );
 
+  // Raw fetch to capture Shopify's actual response body + headers (the wrapped
+  // client masks them as an empty-body 403).
+  try {
+    const rawRes = await fetch(
+      `https://${shop}/admin/api/${out.apiVersion}/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Shopify-Access-Token": session.accessToken,
+        },
+        body: JSON.stringify({ query: `{ shop { name } }` }),
+      }
+    );
+    const bodyText = await rawRes.text();
+    out.raw = {
+      status: rawRes.status,
+      body: bodyText.slice(0, 600),
+      contentType: rawRes.headers.get("content-type"),
+      requestId: rawRes.headers.get("x-request-id"),
+      wwwAuthenticate: rawRes.headers.get("www-authenticate"),
+      shopifyApiVersionWarning: rawRes.headers.get(
+        "x-shopify-api-version-warning"
+      ),
+      location: rawRes.headers.get("location"),
+    };
+  } catch (err) {
+    out.raw = { fetchError: err instanceof Error ? err.message : String(err) };
+  }
+
   return res.json(out);
 });
 
